@@ -1,0 +1,1428 @@
+diff --git i/docs/next/api/herdr-api.schema.json w/docs/next/api/herdr-api.schema.json
+index 26299e7..0ec565a 100644
+--- i/docs/next/api/herdr-api.schema.json
++++ w/docs/next/api/herdr-api.schema.json
+@@ -5467,6 +5467,22 @@
+           ],
+           "type": "object"
+         },
++        {
++          "properties": {
++            "method": {
++              "const": "agent.prompt_if_idle",
++              "type": "string"
++            },
++            "params": {
++              "$ref": "#/schemas/request/$defs/AgentPromptParams"
++            }
++          },
++          "required": [
++            "method",
++            "params"
++          ],
++          "type": "object"
++        },
+         {
+           "properties": {
+             "method": {
+diff --git i/docs/next/website/src/content/docs/cli-reference.mdx w/docs/next/website/src/content/docs/cli-reference.mdx
+index 9f61d02..6625f0e 100644
+--- i/docs/next/website/src/content/docs/cli-reference.mdx
++++ w/docs/next/website/src/content/docs/cli-reference.mdx
+@@ -334,6 +334,7 @@ herdr agent get <target>
+ herdr agent read <target> [--source visible|recent|recent-unwrapped|detection] [--lines N] [--format text|ansi] [--ansi]
+ herdr agent send-keys <target> <key> [key ...]
+ herdr agent prompt <target> <text> [--wait] [--until STATUS]... [--timeout MS]
++herdr agent prompt-if-idle <target> <text> [--wait] [--until STATUS]... [--timeout MS]
+ herdr agent rename <target> <name>|--clear
+ herdr agent focus <target>
+ herdr agent wait <target> [--until STATUS]... [--timeout MS]
+@@ -351,6 +352,9 @@ A successful start returns only after the expected agent owns the same terminal
+ 
+ `agent prompt` honors live bracketed-paste mode and writes text followed by delayed Enter as one ordered submission, including while the agent is working. Success without `--wait` acknowledges the writes, not the start of a turn. On Windows, Codex receives a paste boundary before Enter so submission does not depend on prompt size; the caller timeout includes submission time. If the agent is already `blocked`, it returns `agent_blocked` without sending input. With `--wait`, a prompt sent from another non-working state has up to five seconds after submission to produce an observed `working` or `blocked` state or Herdr returns `agent_prompt_stalled`; if the caller timeout expires first, Herdr returns the normal `timeout` error. This prevents unrelated `idle`, `done`, or session changes from completing the wait. After activity is observed, it waits for the first requested settled status. It does not track individual turns. If the agent is already working, completion of that active turn may satisfy the wait. `--until` narrows the matching states and is rejected unless `--wait` is also present. Standalone `agent wait` returns immediately when the current status matches. Both default to `idle`, `done`, or `blocked`; use `--until unknown` explicitly when needed.
+ 
++Use `agent prompt-if-idle` when automation must submit only to an observed `idle` or `done` agent. The server checks and reserves the terminal atomically, including pending ordinary prompt submissions. Busy agents return `agent_not_idle` or `agent_blocked`; a prompt awaiting writes or observed activity returns `agent_prompt_pending`. Reservations have no timeout and survive caller disconnects. Acceptance precedes the delayed Enter; inspect a stalled agent before retrying. The command requires a server that supports `agent.prompt_if_idle` and never falls back to `agent.prompt`.
++
++
+ `idle` and `done` both mean ready for input. The CLI/API uses the server's seen state: `done` is idle but not yet marked seen, explicit `pane focus` / `agent focus` commands mark the target seen, and reads do not. Each TUI client tracks viewed completions independently, so its Done badge can differ from the CLI or another client. `blocked` means Herdr recognized an approval or question UI. `unknown` means an agent is present but Herdr cannot classify it confidently, not that its work succeeded.
+ 
+ `agent send-keys` sends logical terminal keys such as `enter`, `up`, `esc`, or `ctrl+c`. Herdr validates every key before writing any bytes. `agent read` reads the resolved terminal stream, and `agent rename` names an already detected agent.
+diff --git i/docs/next/website/src/content/docs/socket-api.mdx w/docs/next/website/src/content/docs/socket-api.mdx
+index 5bd933d..cb2f59d 100644
+--- i/docs/next/website/src/content/docs/socket-api.mdx
++++ w/docs/next/website/src/content/docs/socket-api.mdx
+@@ -106,13 +106,16 @@ Raw socket method names use dot notation:
+ | Pane | `pane.split`, `pane.swap`, `pane.move`, `pane.zoom`, `pane.layout`, `pane.process_info`, `pane.neighbor`, `pane.edges`, `pane.focus_direction`, `pane.resize`, `pane.list`, `pane.current`, `pane.get`, `pane.rename`, `pane.send_text`, `pane.send_keys`, `pane.send_input`, `pane.read`, `pane.graphics.info`, `pane.graphics.set`, `pane.graphics.clear`, `pane.graphics.stream`, `pane.report_agent`, `pane.report_agent_session`, `pane.report_metadata`, `pane.clear_agent_authority`, `pane.release_agent`, `pane.close`, `pane.wait_for_output` |
+ | Popup | `popup.close` |
+ | Layout | `layout.export`, `layout.apply`, `layout.set_split_ratio` |
+-| Agent | `agent.list`, `agent.get`, `agent.read`, `agent.explain`, `agent.send_keys`, `agent.prompt`, `agent.wait`, `agent.rename`, `agent.focus`, `agent.start`, `agent.view.set`, `agent.view.clear` |
++| Agent | `agent.list`, `agent.get`, `agent.read`, `agent.explain`, `agent.send_keys`, `agent.prompt`, `agent.prompt_if_idle`, `agent.wait`, `agent.rename`, `agent.focus`, `agent.start`, `agent.view.set`, `agent.view.clear` |
+ | Events | `events.subscribe`, `events.wait` |
+ | Integrations | `integration.install`, `integration.uninstall` |
+ | Plugins | `plugin.link`, `plugin.list`, `plugin.unlink`, `plugin.enable`, `plugin.disable`, `plugin.action.list`, `plugin.action.invoke`, `plugin.log.list`, `plugin.pane.open`, `plugin.pane.focus`, `plugin.pane.close` |
+ 
+ `agent.wait` is server-owned and event-driven. It pins the resolved pane occupant so a replacement cannot satisfy the wait. `agent.prompt` accepts an optional `wait` object with `until` and `timeout_ms`; this submits the prompt and starts the wait in one request, avoiding a race between separate calls. If the resolved agent is already `blocked`, `agent.prompt` returns `agent_blocked` without sending input or starting the wait.
+ 
++`agent.prompt_if_idle` takes the same parameters as `agent.prompt` and atomically checks the server's observed status before queuing input. Only `idle` or `done` is accepted; other states return `agent_not_idle` (`agent_blocked` for blocked agents). A previous prompt still awaiting terminal writes or fresh working/blocked evidence returns `agent_prompt_pending`. The reservation also covers ordinary `agent.prompt` submissions. It has no expiry: a timeout or stalled prompt does not make retry safe. Process exit or replacement clears the reservation. This gate controls acceptance; delayed Enter is part of the already accepted submission. Older servers reject the method instead of silently submitting.
++
++
+ `workspace.move_block` atomically moves the ordered `workspace_ids` before `before_workspace_id`; omit the anchor to move the block to the end. The ids must be unique and the anchor cannot be part of the block. The response contains the authoritative ordered workspace list.
+ 
+ `session.snapshot` returns a one-time bootstrap snapshot for clients that keep
+diff --git i/src/api/mod.rs w/src/api/mod.rs
+index d28a82a..95f389e 100644
+--- i/src/api/mod.rs
++++ w/src/api/mod.rs
+@@ -51,6 +51,7 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
+             | Method::AgentFocus(_)
+             | Method::AgentStart(_)
+             | Method::AgentPrompt(_)
++            | Method::AgentPromptIfIdle(_)
+             | Method::AgentSendKeys(_)
+             | Method::PaneSplit(_)
+             | Method::PaneSwap(_)
+diff --git i/src/api/schema.rs w/src/api/schema.rs
+index 7c58fb6..db357e6 100644
+--- i/src/api/schema.rs
++++ w/src/api/schema.rs
+@@ -135,6 +135,8 @@ pub enum Method {
+     AgentStart(AgentStartParams),
+     #[serde(rename = "agent.prompt")]
+     AgentPrompt(AgentPromptParams),
++    #[serde(rename = "agent.prompt_if_idle")]
++    AgentPromptIfIdle(AgentPromptParams),
+     #[serde(rename = "agent.wait")]
+     AgentWait(AgentWaitParams),
+     #[serde(rename = "pane.split")]
+diff --git i/src/api/schema/tests.rs w/src/api/schema/tests.rs
+index d51c565..64e9cac 100644
+--- i/src/api/schema/tests.rs
++++ w/src/api/schema/tests.rs
+@@ -125,6 +125,21 @@ fn agent_start_and_prompt_requests_round_trip() {
+         prompt
+     );
+ 
++    let guarded = Request {
++        id: "guarded".into(),
++        method: Method::AgentPromptIfIdle(AgentPromptParams {
++            target: "reviewer".into(),
++            text: "review this".into(),
++            wait: None,
++        }),
++    };
++    let guarded_json = serde_json::to_value(&guarded).unwrap();
++    assert_eq!(guarded_json["method"], "agent.prompt_if_idle");
++    assert_eq!(
++        serde_json::from_value::<Request>(guarded_json).unwrap(),
++        guarded
++    );
++
+     let prompt_and_wait = Request {
+         id: "prompt-and-wait".into(),
+         method: Method::AgentPrompt(AgentPromptParams {
+diff --git i/src/api/server.rs w/src/api/server.rs
+index ea7597e..33632f3 100644
+--- i/src/api/server.rs
++++ w/src/api/server.rs
+@@ -246,10 +246,16 @@ fn handle_connection_with_stop(
+             )?;
+             finish_wait_response(&mut stream, response, &request_id, method, changes_ui)
+         }
+-        Method::AgentPrompt(params) => {
++        prompt_method @ (Method::AgentPrompt(_) | Method::AgentPromptIfIdle(_)) => {
++            let (params, only_if_idle) = match prompt_method {
++                Method::AgentPrompt(params) => (params, false),
++                Method::AgentPromptIfIdle(params) => (params, true),
++                _ => unreachable!("matched prompt method"),
++            };
+             let response = prompt_agent(
+                 request_id.clone(),
+                 params,
++                only_if_idle,
+                 &mut stream,
+                 api_tx,
+                 event_hub,
+@@ -429,6 +435,7 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
+         Method::AgentFocus(_) => "agent.focus",
+         Method::AgentStart(_) => "agent.start",
+         Method::AgentPrompt(_) => "agent.prompt",
++        Method::AgentPromptIfIdle(_) => "agent.prompt_if_idle",
+         Method::AgentWait(_) => "agent.wait",
+         Method::PaneSplit(_) => "pane.split",
+         Method::PaneSwap(_) => "pane.swap",
+@@ -1224,6 +1231,121 @@ mod tests {
+         assert_eq!(parsed.id, "req_2");
+     }
+ 
++    #[test]
++    fn prompt_if_idle_wait_requires_activity_after_working_preflight() {
++        let (api_tx, mut api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
++        let responder = std::thread::spawn(move || {
++            let mut first_get = true;
++            let mut prompted = false;
++            while let Some(msg) = api_rx.blocking_recv() {
++                let (result_type, status) = match msg.request.method {
++                    Method::AgentGet(_) if first_get => {
++                        first_get = false;
++                        ("agent_info", "working")
++                    }
++                    Method::AgentGet(_) => ("agent_info", "idle"),
++                    Method::AgentPromptIfIdle(_) => {
++                        prompted = true;
++                        ("agent_prompted", "idle")
++                    }
++                    method => panic!("unexpected request {method:?}"),
++                };
++                msg.respond_to.send(serde_json::json!({
++                    "id":msg.request.id,
++                    "result":{"type":result_type,"agent":{
++                        "terminal_id":"term_1","name":"reviewer","agent":"pi","agent_status":status,
++                        "workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p1","focused":true,"revision":0
++                    }}
++                }).to_string()).unwrap();
++            }
++            prompted
++        });
++        let (mut client, server, path) = local_stream_pair("guarded-wait-preflight");
++        writeln!(
++            client,
++            "{}",
++            serde_json::json!({
++                "id":"guarded", "method":"agent.prompt_if_idle", "params":{
++                    "target":"reviewer", "text":"check", "wait":{"timeout_ms":250}
++                }
++            })
++        )
++        .unwrap();
++        client.flush().unwrap();
++        handle_connection(
++            server,
++            &api_tx,
++            &EventHub::default(),
++            &Arc::new(AtomicBool::new(true)),
++            None,
++        )
++        .unwrap();
++        let response: serde_json::Value = serde_json::from_str(&read_line(&mut client)).unwrap();
++        assert_eq!(
++            response["error"]["code"], "timeout",
++            "preflight activity must not complete a newly accepted guarded prompt"
++        );
++        drop(api_tx);
++        assert!(
++            responder.join().unwrap(),
++            "the test must reach guarded prompt acceptance before timing out"
++        );
++        let _ = fs::remove_file(path);
++    }
++
++    #[test]
++    fn prompt_if_idle_keeps_guard_through_wait_and_no_wait_dispatch() {
++        for wait in [false, true] {
++            let (api_tx, mut api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
++            let responder = std::thread::spawn(move || {
++                while let Some(msg) = api_rx.blocking_recv() {
++                    let response = match msg.request.method {
++                        Method::AgentGet(_) => serde_json::json!({
++                            "id": msg.request.id,
++                            "result": { "type": "agent_info", "agent": {
++                                "terminal_id": "term_1", "name": "reviewer", "agent": "pi",
++                                "agent_status": "idle", "workspace_id": "w1", "tab_id": "w1:t1",
++                                "pane_id": "w1:p1", "focused": true, "revision": 0
++                            }}
++                        })
++                        .to_string(),
++                        Method::AgentPromptIfIdle(params) => {
++                            assert_eq!(params.wait.is_some(), wait);
++                            error_response_json(
++                                msg.request.id,
++                                "agent_prompt_pending",
++                                "reserved".into(),
++                            )
++                        }
++                        method => panic!("guarded submission became {method:?}"),
++                    };
++                    msg.respond_to.send(response).unwrap();
++                }
++            });
++            let (mut client, server, path) = local_stream_pair("prompt-if-idle");
++            let mut params = serde_json::json!({"target":"reviewer", "text":"check"});
++            if wait {
++                params["wait"] = serde_json::json!({"timeout_ms":1000});
++            }
++            writeln!(client, "{}", serde_json::json!({"id":"guarded", "method":"agent.prompt_if_idle", "params":params})).unwrap();
++            client.flush().unwrap();
++            handle_connection(
++                server,
++                &api_tx,
++                &EventHub::default(),
++                &Arc::new(AtomicBool::new(true)),
++                None,
++            )
++            .unwrap();
++            let response: serde_json::Value =
++                serde_json::from_str(&read_line(&mut client)).unwrap();
++            assert_eq!(response["error"]["code"], "agent_prompt_pending");
++            drop(api_tx);
++            responder.join().unwrap();
++            let _ = fs::remove_file(path);
++        }
++    }
++
+     #[test]
+     fn dispatched_request_reports_response_write_completion() {
+         let (api_tx, mut api_rx) = mpsc::unbounded_channel();
+diff --git i/src/api/wait.rs w/src/api/wait.rs
+index 541779f..5b6bb3c 100644
+--- i/src/api/wait.rs
++++ w/src/api/wait.rs
+@@ -174,9 +174,18 @@ pub(super) fn wait_for_agent(
+     }
+ }
+ 
++fn prompt_method(params: crate::api::schema::AgentPromptParams, only_if_idle: bool) -> Method {
++    if only_if_idle {
++        Method::AgentPromptIfIdle(params)
++    } else {
++        Method::AgentPrompt(params)
++    }
++}
++
+ pub(super) fn prompt_agent(
+     request_id: String,
+     mut params: crate::api::schema::AgentPromptParams,
++    only_if_idle: bool,
+     stream: &mut LocalStream,
+     api_tx: &ApiRequestSender,
+     event_hub: &EventHub,
+@@ -186,7 +195,7 @@ pub(super) fn prompt_agent(
+         return Ok(Some(dispatch_to_app_with_timeout(
+             Request {
+                 id: request_id,
+-                method: Method::AgentPrompt(params),
++                method: prompt_method(params, only_if_idle),
+             },
+             api_tx,
+             None,
+@@ -209,7 +218,7 @@ pub(super) fn prompt_agent(
+         }
+     };
+     let prompt_started_working =
+-        before_prompt.agent_status == crate::api::schema::AgentStatus::Working;
++        !only_if_idle && before_prompt.agent_status == crate::api::schema::AgentStatus::Working;
+     let target = params.target.clone();
+     if let Some(prompt_wait) = params.wait.as_mut() {
+         prompt_wait.submission_deadline = wait
+@@ -219,7 +228,7 @@ pub(super) fn prompt_agent(
+     let last_event_sequence = event_hub.current_sequence();
+     let prompt_request = Request {
+         id: request_id.clone(),
+-        method: Method::AgentPrompt(params),
++        method: prompt_method(params, only_if_idle),
+     };
+     #[cfg(windows)]
+     let prompt_response = dispatch_to_app_with_caller_timeout(
+diff --git i/src/app/actions.rs w/src/app/actions.rs
+index 8531433..7f81f45 100644
+--- i/src/app/actions.rs
++++ w/src/app/actions.rs
+@@ -1442,6 +1442,16 @@ impl AppState {
+ 
+     pub fn handle_app_event(&mut self, event: AppEvent) -> Vec<PaneStateUpdate> {
+         match event {
++            AppEvent::AgentPromptWritten {
++                terminal_id,
++                submission_id,
++                written_at,
++            } => {
++                if let Some(terminal) = self.terminals.get_mut(&terminal_id) {
++                    terminal.finish_agent_prompt_write(submission_id, written_at);
++                }
++                Vec::new()
++            }
+             AppEvent::PaneDied { pane_id, .. } => {
+                 self.handle_pane_died(pane_id);
+                 Vec::new()
+diff --git i/src/app/api.rs w/src/app/api.rs
+index 1270fef..2e53fe5 100644
+--- i/src/app/api.rs
++++ w/src/app/api.rs
+@@ -39,7 +39,7 @@ impl App {
+                 segment_index,
+                 result,
+             } => self.handle_tab_bar_command_finished(generation, segment_index, result),
+-            ev @ AppEvent::TerminalBell { .. } => {
++            ev @ (AppEvent::TerminalBell { .. } | AppEvent::AgentPromptWritten { .. }) => {
+                 self.handle_internal_event(ev);
+                 false
+             }
+@@ -83,6 +83,9 @@ impl App {
+         &mut self,
+         ev: AppEvent,
+     ) -> Vec<crate::app::actions::PaneStateUpdate> {
++        if matches!(&ev, AppEvent::AgentPromptWritten { .. }) {
++            return self.state.handle_app_event(ev);
++        }
+         let mut worktree_restore_failed = false;
+         let ev = match ev {
+             AppEvent::WorktreeRuntimeRestoreFailed {
+@@ -1062,7 +1065,7 @@ impl App {
+                 return self.handle_agent_view_clear(request.id, params);
+             }
+             Method::AgentStart(params) => return self.handle_agent_start(request.id, params),
+-            Method::AgentPrompt(_) => {
++            Method::AgentPrompt(_) | Method::AgentPromptIfIdle(_) => {
+                 return responses::encode_error(
+                     request.id,
+                     "invalid_request",
+diff --git i/src/app/api/agents.rs w/src/app/api/agents.rs
+index 9289ae0..532f054 100644
+--- i/src/app/api/agents.rs
++++ w/src/app/api/agents.rs
+@@ -12,6 +12,15 @@ use super::responses::{encode_error, encode_error_body, encode_success};
+ 
+ const AGENT_PROMPT_SUBMIT_DELAY: Duration = Duration::from_millis(300);
+ 
++#[derive(Debug)]
++struct QueuedAgentPrompt {
++    id: String,
++    agent: crate::api::schema::AgentInfo,
++    terminal_id: crate::terminal::TerminalId,
++    submission_id: u64,
++    completion: std::sync::mpsc::Receiver<std::io::Result<std::time::Instant>>,
++}
++
+ // Codex's Windows input reader does not surface bracketed paste. It detects the prompt as a
+ // "paste burst" and, while that burst is buffered, rewrites a following Enter into a newline
+ // instead of submitting. The burst only flushes after an idle timeout, so any size-based delay is
+@@ -84,14 +93,32 @@ impl App {
+         request: crate::api::schema::Request,
+         respond_to: std::sync::mpsc::Sender<String>,
+     ) -> bool {
+-        let crate::api::schema::Method::AgentPrompt(params) = request.method else {
+-            return false;
++        let (params, only_if_idle) = match request.method {
++            crate::api::schema::Method::AgentPrompt(params) => (params, false),
++            crate::api::schema::Method::AgentPromptIfIdle(params) => (params, true),
++            _ => return false,
+         };
+-        match self.queue_agent_prompt(request.id, params) {
+-            Ok((id, agent, completion)) => {
++        match self.queue_agent_prompt(request.id, params, only_if_idle) {
++            Ok(QueuedAgentPrompt {
++                id,
++                agent,
++                terminal_id,
++                submission_id,
++                completion,
++            }) => {
++                let event_tx = self.event_tx.clone();
+                 std::thread::spawn(move || {
+                     let response = match completion.recv() {
+-                        Ok(Ok(())) => encode_success(id, ResponseResult::AgentPrompted { agent }),
++                        Ok(Ok(written_at)) => {
++                            let _ = event_tx.blocking_send(
++                                crate::events::AppEvent::AgentPromptWritten {
++                                    terminal_id,
++                                    submission_id,
++                                    written_at,
++                                },
++                            );
++                            encode_success(id, ResponseResult::AgentPrompted { agent })
++                        }
+                         Ok(Err(err)) if err.kind() == std::io::ErrorKind::TimedOut => {
+                             encode_error(id, "timeout", err.to_string())
+                         }
+@@ -112,14 +139,8 @@ impl App {
+         &mut self,
+         id: String,
+         params: AgentPromptParams,
+-    ) -> Result<
+-        (
+-            String,
+-            crate::api::schema::AgentInfo,
+-            std::sync::mpsc::Receiver<std::io::Result<()>>,
+-        ),
+-        String,
+-    > {
++        only_if_idle: bool,
++    ) -> Result<QueuedAgentPrompt, String> {
+         if params.text.is_empty() {
+             return Err(encode_error(
+                 id,
+@@ -153,6 +174,22 @@ impl App {
+                 ),
+             ));
+         }
++        if only_if_idle {
++            if terminal.state != crate::detect::AgentState::Idle {
++                return Err(encode_error(
++                    id,
++                    "agent_not_idle",
++                    "agent must be idle or done",
++                ));
++            }
++            if terminal.agent_prompt_pending() {
++                return Err(encode_error(
++                    id,
++                    "agent_prompt_pending",
++                    "a previous prompt is awaiting observed activity",
++                ));
++            }
++        }
+         let Some(expected_agent) = terminal.effective_known_agent() else {
+             return Err(agent_not_ready(id, &params.target));
+         };
+@@ -179,18 +216,6 @@ impl App {
+             .and_then(|wait| wait.submission_deadline);
+         #[cfg(not(windows))]
+         let submit_deadline = None;
+-        if expected_agent == crate::detect::Agent::GithubCopilot {
+-            // Copilot ignores synthetic Enter after focus loss until it receives focus gained.
+-            let focus = match crate::ghostty::encode_focus(crate::ghostty::FocusEvent::Gained) {
+-                Ok(focus) => focus,
+-                Err(err) => {
+-                    return Err(encode_error(id, "agent_prompt_failed", err.to_string()));
+-                }
+-            };
+-            if let Err(err) = runtime.try_send_bytes(Bytes::from(focus)) {
+-                return Err(encode_error(id, "agent_prompt_failed", err.to_string()));
+-            }
+-        }
+         let (text, enter) =
+             crate::app::api_helpers::encode_api_submission_parts(runtime, &params.text);
+         #[cfg(windows)]
+@@ -204,15 +229,61 @@ impl App {
+         let Some(agent) = self.agent_info(resolved.ws_idx, resolved.pane_id) else {
+             return Err(agent_not_found(id, &params.target));
+         };
+-        let completion = runtime
+-            .queue_user_input_submission(
+-                Bytes::from(text),
+-                Bytes::from(enter),
+-                AGENT_PROMPT_SUBMIT_DELAY,
+-                submit_deadline,
+-            )
+-            .map_err(|err| encode_error(id.clone(), "agent_prompt_failed", err.to_string()))?;
+-        Ok((id, agent, completion))
++        let submission_id = self
++            .state
++            .terminals
++            .get_mut(&terminal_id)
++            .ok_or_else(|| agent_not_found(id.clone(), &params.target))?
++            .reserve_agent_prompt(std::time::Instant::now());
++        let queued = (|| {
++            let runtime = self
++                .lookup_runtime_sender(resolved.ws_idx, resolved.pane_id)
++                .ok_or_else(|| agent_not_found(id.clone(), &params.target))?;
++            if expected_agent == crate::detect::Agent::GithubCopilot {
++                // Copilot ignores synthetic Enter after focus loss until it receives focus gained.
++                let focus = match crate::ghostty::encode_focus(crate::ghostty::FocusEvent::Gained) {
++                    Ok(focus) => focus,
++                    Err(err) => {
++                        return Err(encode_error(
++                            id.clone(),
++                            "agent_prompt_failed",
++                            err.to_string(),
++                        ));
++                    }
++                };
++                if let Err(err) = runtime.try_send_bytes(Bytes::from(focus)) {
++                    return Err(encode_error(
++                        id.clone(),
++                        "agent_prompt_failed",
++                        err.to_string(),
++                    ));
++                }
++            }
++            runtime
++                .queue_user_input_submission(
++                    Bytes::from(text),
++                    Bytes::from(enter),
++                    AGENT_PROMPT_SUBMIT_DELAY,
++                    submit_deadline,
++                )
++                .map_err(|err| encode_error(id.clone(), "agent_prompt_failed", err.to_string()))
++        })();
++        let completion = match queued {
++            Ok(completion) => completion,
++            Err(error) => {
++                if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
++                    terminal.cancel_unqueued_agent_prompt(submission_id);
++                }
++                return Err(error);
++            }
++        };
++        Ok(QueuedAgentPrompt {
++            id,
++            agent,
++            terminal_id,
++            submission_id,
++            completion,
++        })
+     }
+ 
+     pub(super) fn handle_agent_read(
+@@ -439,6 +510,128 @@ mod tests {
+             .expect("agent prompt responds after submission")
+     }
+ 
++    #[tokio::test]
++    async fn agent_prompt_if_idle_rejects_busy_states_without_input() {
++        for state in [
++            AgentState::Working,
++            AgentState::Blocked,
++            AgentState::Unknown,
++        ] {
++            let mut app = app_with_agent();
++            let pane_id = app.state.workspaces[0].tabs[0].root_pane;
++            let terminal_id = app.state.workspaces[0]
++                .terminal_id(pane_id)
++                .unwrap()
++                .clone();
++            let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
++            terminal.set_agent_name("reviewer".into());
++            terminal.set_detected_state(Some(Agent::GithubCopilot), state);
++            let (runtime, mut input) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
++            app.state.insert_test_runtime(pane_id, runtime);
++            let response = app
++                .queue_agent_prompt(
++                    "reject".into(),
++                    AgentPromptParams {
++                        target: "reviewer".into(),
++                        text: "unexpected".into(),
++                        wait: None,
++                    },
++                    true,
++                )
++                .unwrap_err();
++            let error: crate::api::schema::ErrorResponse = serde_json::from_str(&response).unwrap();
++            assert_eq!(
++                error.error.code,
++                if state == AgentState::Blocked {
++                    "agent_blocked"
++                } else {
++                    "agent_not_idle"
++                }
++            );
++            assert!(
++                input.try_recv().is_err(),
++                "rejection must not even send Copilot focus"
++            );
++            assert!(!app.state.terminals[&terminal_id].agent_prompt_pending());
++        }
++    }
++
++    #[tokio::test]
++    async fn agent_prompt_if_idle_fences_aliases_and_legacy_submissions_until_activity() {
++        for first_is_strict in [false, true] {
++            let mut app = app_with_agent();
++            let pane_id = app.state.workspaces[0].tabs[0].root_pane;
++            let terminal_id = app.state.workspaces[0]
++                .terminal_id(pane_id)
++                .unwrap()
++                .clone();
++            let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
++            terminal.set_agent_name("reviewer".into());
++            terminal.set_detected_state(Some(Agent::OpenCode), AgentState::Idle);
++            let (runtime, mut input) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
++            app.state.insert_test_runtime(pane_id, runtime);
++            let first = app
++                .queue_agent_prompt(
++                    "first".into(),
++                    AgentPromptParams {
++                        target: "reviewer".into(),
++                        text: "first".into(),
++                        wait: None,
++                    },
++                    first_is_strict,
++                )
++                .unwrap();
++            let pane_target = app.public_pane_id(0, pane_id).unwrap();
++            let reject = |app: &mut App| {
++                let response = app
++                    .queue_agent_prompt(
++                        "second".into(),
++                        AgentPromptParams {
++                            target: pane_target.clone(),
++                            text: "second".into(),
++                            wait: None,
++                        },
++                        true,
++                    )
++                    .unwrap_err();
++                let error: crate::api::schema::ErrorResponse =
++                    serde_json::from_str(&response).unwrap();
++                assert_eq!(error.error.code, "agent_prompt_pending");
++            };
++            reject(&mut app);
++            let written_at = first
++                .completion
++                .recv_timeout(Duration::from_secs(1))
++                .unwrap()
++                .unwrap();
++            app.state
++                .handle_app_event(crate::events::AppEvent::AgentPromptWritten {
++                    terminal_id: terminal_id.clone(),
++                    submission_id: first.submission_id,
++                    written_at,
++                });
++            assert_eq!(input.try_recv().unwrap(), Bytes::from_static(b"first"));
++            assert_eq!(input.try_recv().unwrap(), Bytes::from_static(b"\r"));
++            reject(&mut app);
++            assert!(input.try_recv().is_err());
++            let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
++            terminal.set_detected_state(Some(Agent::OpenCode), AgentState::Working);
++            terminal.set_detected_state(Some(Agent::OpenCode), AgentState::Idle);
++            assert!(!terminal.agent_prompt_pending());
++            assert!(app
++                .queue_agent_prompt(
++                    "third".into(),
++                    AgentPromptParams {
++                        target: "reviewer".into(),
++                        text: "third".into(),
++                        wait: None,
++                    },
++                    true
++                )
++                .is_ok());
++        }
++    }
++
+     #[cfg(windows)]
+     #[tokio::test]
+     async fn windows_codex_prompt_flushes_paste_burst_before_enter() {
+diff --git i/src/cli/agent.rs w/src/cli/agent.rs
+index 1af3e0d..2e98424 100644
+--- i/src/cli/agent.rs
++++ w/src/cli/agent.rs
+@@ -20,7 +20,8 @@ pub(super) fn run_agent_command(args: &[String]) -> std::io::Result<i32> {
+         "get" => agent_get(&args[1..]),
+         "read" => agent_read(&args[1..]),
+         "send-keys" => agent_send_keys(&args[1..]),
+-        "prompt" => agent_prompt(&args[1..]),
++        "prompt" => agent_prompt(&args[1..], false),
++        "prompt-if-idle" => agent_prompt(&args[1..], true),
+         "rename" => agent_rename(&args[1..]),
+         "focus" => agent_focus(&args[1..]),
+         "wait" => agent_wait(&args[1..]),
+@@ -768,7 +769,7 @@ fn agent_rename(args: &[String]) -> std::io::Result<i32> {
+     })?)
+ }
+ 
+-fn agent_prompt(args: &[String]) -> std::io::Result<i32> {
++fn agent_prompt(args: &[String], only_if_idle: bool) -> std::io::Result<i32> {
+     let Some(target) = args.first() else {
+         eprintln!(
+             "usage: herdr agent prompt <target> <text> [--wait] [--until STATUS]... [--timeout MS]"
+@@ -829,17 +830,22 @@ fn agent_prompt(args: &[String]) -> std::io::Result<i32> {
+         eprintln!("--timeout requires --wait");
+         return Ok(2);
+     }
++    let params = AgentPromptParams {
++        target: target.clone(),
++        text: text.clone(),
++        wait: wait.then_some(AgentPromptWaitOptions {
++            until,
++            timeout_ms,
++            submission_deadline: None,
++        }),
++    };
+     let response = super::send_request(&Request {
+         id: "cli:agent:prompt".into(),
+-        method: Method::AgentPrompt(AgentPromptParams {
+-            target: target.clone(),
+-            text: text.clone(),
+-            wait: wait.then_some(AgentPromptWaitOptions {
+-                until,
+-                timeout_ms,
+-                submission_deadline: None,
+-            }),
+-        }),
++        method: if only_if_idle {
++            Method::AgentPromptIfIdle(params)
++        } else {
++            Method::AgentPrompt(params)
++        },
+     })?;
+     super::print_response(&response)
+ }
+@@ -930,6 +936,9 @@ fn print_agent_help() {
+     eprintln!("  herdr agent read <target> [--source visible|recent|recent-unwrapped|detection] [--lines N] [--format text|ansi] [--ansi]");
+     eprintln!("  herdr agent send-keys <target> <key> [key ...]");
+     eprintln!("  herdr agent prompt <target> <text> [--wait] [--until STATUS]... [--timeout MS]");
++    eprintln!(
++        "  herdr agent prompt-if-idle <target> <text> [--wait] [--until STATUS]... [--timeout MS]"
++    );
+     eprintln!("  herdr agent rename <target> <name>|--clear");
+     eprintln!("  herdr agent focus <target>");
+     eprintln!("  herdr agent wait <target> [--until STATUS]... [--timeout MS]");
+diff --git i/src/cli/spec.rs w/src/cli/spec.rs
+index 9465dcc..7886e46 100644
+--- i/src/cli/spec.rs
++++ w/src/cli/spec.rs
+@@ -314,6 +314,33 @@ fn notification_command() -> Command {
+         )
+ }
+ 
++fn agent_prompt_command(
++    name: &'static str,
++    about: &'static str,
++    usage: &'static str,
++    help: &'static str,
++) -> Command {
++    Command::new(name)
++        .about(about)
++        .override_usage(usage)
++        .arg(required("target", "TARGET"))
++        .arg(required("text", "TEXT"))
++        .arg(flag("wait").help("Wait for the first matching state observed after submission"))
++        .arg(
++            option("until", "STATUS")
++                .action(ArgAction::Append)
++                .requires("wait")
++                .value_parser(["idle", "working", "blocked", "done", "unknown"])
++                .help("State to match after --wait; repeat for more than one state"),
++        )
++        .arg(
++            option("timeout", "MS")
++                .requires("wait")
++                .help("Fail after this many milliseconds"),
++        )
++        .after_help(help)
++}
++
+ fn agent_command() -> Command {
+     Command::new("agent")
+         .about("Control and inspect agent panes")
+@@ -336,32 +363,8 @@ fn agent_command() -> Command {
+                 .arg(required("key", "KEY").num_args(1..))
+                 .after_help("Use esc as the canonical Escape key name; escape is also accepted."),
+         )
+-        .subcommand(
+-            Command::new("prompt")
+-                .about("Submit a prompt to an agent")
+-                .override_usage("herdr agent prompt <TARGET> <TEXT> [OPTIONS]")
+-                .arg(required("target", "TARGET"))
+-                .arg(required("text", "TEXT"))
+-                .arg(
+-                    flag("wait")
+-                        .help("Wait for the first matching state observed after submission"),
+-                )
+-                .arg(
+-                    option("until", "STATUS")
+-                        .action(ArgAction::Append)
+-                        .requires("wait")
+-                        .value_parser(["idle", "working", "blocked", "done", "unknown"])
+-                        .help("State to match after --wait; repeat for more than one state"),
+-                )
+-                .arg(
+-                    option("timeout", "MS")
+-                        .requires("wait")
+-                        .help("Fail after this many milliseconds"),
+-                )
+-                .after_help(
+-                    "If the agent is already blocked, submission is rejected with agent_blocked before any input is sent. When an accepted submission starts from another non-working state, --wait requires an observed working or blocked state within 5000ms; otherwise it returns agent_prompt_stalled. A caller timeout that expires first returns timeout. It then matches idle, done, or blocked by default, or any exact --until state. It does not track turns: if the agent is already working, that active turn's completion may match.",
+-                ),
+-        )
++        .subcommand(agent_prompt_command("prompt", "Submit a prompt to an agent", "herdr agent prompt <TARGET> <TEXT> [OPTIONS]", "If the agent is already blocked, submission is rejected with agent_blocked before any input is sent. When an accepted submission starts from another non-working state, --wait requires an observed working or blocked state within 5000ms; otherwise it returns agent_prompt_stalled. A caller timeout that expires first returns timeout. It then matches idle, done, or blocked by default, or any exact --until state. It does not track turns: if the agent is already working, that active turn's completion may match.",))
++        .subcommand(agent_prompt_command("prompt-if-idle", "Submit a prompt only while the agent is idle or done", "herdr agent prompt-if-idle <TARGET> <TEXT> [OPTIONS]", "Atomically rejects agents outside idle or done and agents with a pending prompt. Pending submissions remain reserved until terminal writes complete and fresh working or blocked activity is observed. A stalled submission stays reserved until the agent resumes or its process exits. --wait uses the same settled-state matching as agent prompt.",))
+         .subcommand(
+             Command::new("rename")
+                 .about("Rename an agent")
+diff --git i/src/events.rs w/src/events.rs
+index 9563899..8d099fd 100644
+--- i/src/events.rs
++++ w/src/events.rs
+@@ -55,6 +55,11 @@ pub struct WorktreeRemoveResult {
+ /// An event from a background task to the main loop.
+ #[derive(Debug)]
+ pub enum AppEvent {
++    AgentPromptWritten {
++        terminal_id: crate::terminal::TerminalId,
++        submission_id: u64,
++        written_at: Instant,
++    },
+     /// A pane's child process exited.
+     PaneDied {
+         pane_id: PaneId,
+diff --git i/src/pane.rs w/src/pane.rs
+index ec1b864..b4c4a56 100644
+--- i/src/pane.rs
++++ w/src/pane.rs
+@@ -1408,7 +1408,7 @@ impl PaneRuntimeIo {
+         enter: Bytes,
+         delay: std::time::Duration,
+         deadline: Option<std::time::Instant>,
+-    ) -> std::io::Result<std::sync::mpsc::Receiver<std::io::Result<()>>> {
++    ) -> std::io::Result<std::sync::mpsc::Receiver<std::io::Result<std::time::Instant>>> {
+         match self {
+             PaneRuntimeIo::Actor(actor) => {
+                 #[cfg(windows)]
+@@ -1430,7 +1430,10 @@ impl PaneRuntimeIo {
+                         .map_err(std::io::Error::other)
+                         .and_then(|()| {
+                             std::thread::sleep(delay);
+-                            sender.try_send(enter).map_err(std::io::Error::other)
++                            sender
++                                .try_send(enter)
++                                .map(|()| std::time::Instant::now())
++                                .map_err(std::io::Error::other)
+                         });
+                     let _ = reply_tx.send(result);
+                 });
+@@ -3227,7 +3230,7 @@ impl PaneRuntime {
+         enter: Bytes,
+         delay: std::time::Duration,
+         deadline: Option<std::time::Instant>,
+-    ) -> std::io::Result<std::sync::mpsc::Receiver<std::io::Result<()>>> {
++    ) -> std::io::Result<std::sync::mpsc::Receiver<std::io::Result<std::time::Instant>>> {
+         self.io
+             .queue_user_input_submission(text, enter, delay, deadline)
+     }
+diff --git i/src/pty/actor.rs w/src/pty/actor.rs
+index 76e793e..f2bc3ee 100644
+--- i/src/pty/actor.rs
++++ w/src/pty/actor.rs
+@@ -50,7 +50,7 @@ mod windows {
+             enter: Bytes,
+             delay: Duration,
+             deadline: Option<Instant>,
+-            reply: std_mpsc::Sender<std::io::Result<()>>,
++            reply: std_mpsc::Sender<std::io::Result<Instant>>,
+         },
+     }
+ 
+@@ -59,7 +59,7 @@ mod windows {
+         SubmissionPart {
+             bytes: Bytes,
+             deadline: Option<Instant>,
+-            reply: std_mpsc::Sender<std::io::Result<()>>,
++            reply: std_mpsc::Sender<std::io::Result<Instant>>,
+         },
+     }
+ 
+@@ -113,7 +113,7 @@ mod windows {
+             enter: Bytes,
+             delay: Duration,
+             deadline: Option<Instant>,
+-        ) -> std::io::Result<std_mpsc::Receiver<std::io::Result<()>>> {
++        ) -> std::io::Result<std_mpsc::Receiver<std::io::Result<Instant>>> {
+             let accepting = self
+                 .accepting
+                 .lock()
+@@ -309,7 +309,7 @@ mod windows {
+                     let failed = result
+                         .as_ref()
+                         .is_err_and(|err| err.kind() != std::io::ErrorKind::TimedOut);
+-                    let _ = reply.send(result);
++                    let _ = reply.send(result.map(|()| Instant::now()));
+                     if failed {
+                         break;
+                     }
+@@ -348,7 +348,7 @@ mod windows {
+                     } else {
+                         let text_deadline =
+                             deadline.and_then(|deadline| deadline.checked_sub(delay));
+-                        write_submission_part(&write_tx, text, text_deadline).and_then(|()| {
++                        write_submission_part(&write_tx, text, text_deadline).and_then(|_| {
+                             // A started text write is committed. Finish Enter even if the caller
+                             // stops waiting so a timeout cannot leave a partial prompt.
+                             std::thread::sleep(delay);
+@@ -377,7 +377,7 @@ mod windows {
+         write_tx: &std_mpsc::Sender<PtyIoWriteCommand>,
+         bytes: Bytes,
+         deadline: Option<Instant>,
+-    ) -> std::io::Result<()> {
++    ) -> std::io::Result<Instant> {
+         let (reply, completion) = std_mpsc::channel();
+         write_tx
+             .send(PtyIoWriteCommand::SubmissionPart {
+@@ -441,7 +441,7 @@ mod windows {
+             delay: Duration,
+             deadline: Option<Instant>,
+             during_delay: impl FnOnce(&std_mpsc::Sender<PtyIoWriteCommand>, &Arc<Mutex<bool>>),
+-        ) -> (RecordingWriter, std::io::Result<()>) {
++        ) -> (RecordingWriter, std::io::Result<Instant>) {
+             let (flushed_tx, flushed_rx) = std_mpsc::channel();
+             let mut writer = RecordingWriter {
+                 writes: Vec::new(),
+diff --git i/src/pty/actor/unix.rs w/src/pty/actor/unix.rs
+index 4d57dd1..4216e79 100644
+--- i/src/pty/actor/unix.rs
++++ w/src/pty/actor/unix.rs
+@@ -77,7 +77,7 @@ enum PtyIoDataCommand {
+         text: Bytes,
+         enter: Bytes,
+         delay: Duration,
+-        reply: std_mpsc::Sender<std::io::Result<()>>,
++        reply: std_mpsc::Sender<std::io::Result<Instant>>,
+     },
+ }
+ 
+@@ -145,7 +145,7 @@ impl PtyIoActorHandle {
+         text: Bytes,
+         enter: Bytes,
+         delay: Duration,
+-    ) -> std::io::Result<std_mpsc::Receiver<std::io::Result<()>>> {
++    ) -> std::io::Result<std_mpsc::Receiver<std::io::Result<Instant>>> {
+         let user_writes = self
+             .user_writes
+             .lock()
+@@ -462,7 +462,7 @@ struct ActiveSubmission {
+     enter: Bytes,
+     delay: Duration,
+     phase: SubmissionPhase,
+-    reply: std_mpsc::Sender<std::io::Result<()>>,
++    reply: std_mpsc::Sender<std::io::Result<Instant>>,
+ }
+ 
+ #[derive(Debug, PartialEq, Eq)]
+@@ -871,7 +871,7 @@ impl PtyIoActorRunner {
+                     return;
+                 };
+                 debug_assert!(matches!(submission.phase, SubmissionPhase::WritingEnter));
+-                let _ = submission.reply.send(Ok(()));
++                let _ = submission.reply.send(Ok(Instant::now()));
+             }
+         }
+     }
+@@ -889,7 +889,7 @@ impl PtyIoActorRunner {
+             let enter = enter.clone();
+             if enter.is_empty() {
+                 let submission = self.active_submission.take().unwrap();
+-                let _ = submission.reply.send(Ok(()));
++                let _ = submission.reply.send(Ok(Instant::now()));
+             } else {
+                 self.active_submission.as_mut().unwrap().phase = SubmissionPhase::WritingEnter;
+                 self.enqueue_submission_write(enter, SubmissionBoundary::Enter);
+diff --git i/src/server/headless.rs w/src/server/headless.rs
+index f07c0c3..4fda430 100644
+--- i/src/server/headless.rs
++++ w/src/server/headless.rs
+@@ -3086,7 +3086,10 @@ impl HeadlessServer {
+             return changed;
+         }
+         let alt_screen_read_spec = self.alt_screen_read_spec(&msg.request);
+-        if matches!(&msg.request.method, api::schema::Method::AgentPrompt(_)) {
++        if matches!(
++            &msg.request.method,
++            api::schema::Method::AgentPrompt(_) | api::schema::Method::AgentPromptIfIdle(_)
++        ) {
+             let deferred_changed = self
+                 .app
+                 .handle_deferred_agent_api_request(msg.request, msg.respond_to);
+diff --git i/src/terminal/runtime.rs w/src/terminal/runtime.rs
+index 4679579..2651b99 100644
+--- i/src/terminal/runtime.rs
++++ w/src/terminal/runtime.rs
+@@ -468,7 +468,7 @@ impl TerminalRuntime {
+         enter: Bytes,
+         delay: std::time::Duration,
+         deadline: Option<std::time::Instant>,
+-    ) -> std::io::Result<std::sync::mpsc::Receiver<std::io::Result<()>>> {
++    ) -> std::io::Result<std::sync::mpsc::Receiver<std::io::Result<std::time::Instant>>> {
+         self.0
+             .queue_user_input_submission(text, enter, delay, deadline)
+     }
+diff --git i/src/terminal/state.rs w/src/terminal/state.rs
+index 7ceaede..eac575d 100644
+--- i/src/terminal/state.rs
++++ w/src/terminal/state.rs
+@@ -112,6 +112,14 @@ struct RecentAgentProcessExit {
+     observed_at: Instant,
+ }
+ 
++#[derive(Debug)]
++struct AgentPromptSubmission {
++    reserved_at: Instant,
++    pending_writes: std::collections::HashSet<u64>,
++    last_written_at: Option<Instant>,
++    activity_observed_at: Option<Instant>,
++}
++
+ /// Pure state for a server-owned terminal.
+ ///
+ /// During the migration this is still one-to-one with a pane-backed PTY, but
+@@ -148,6 +156,8 @@ pub struct TerminalState {
+     recent_agent_process_exit: Option<RecentAgentProcessExit>,
+     agent_process_acquisition_pending: bool,
+     pub pending_agent_resume_plan: Option<crate::agent_resume::AgentResumePlan>,
++    next_agent_prompt_submission: u64,
++    agent_prompt_submission: Option<AgentPromptSubmission>,
+ }
+ 
+ impl TerminalState {
+@@ -183,6 +193,80 @@ impl TerminalState {
+             recent_agent_process_exit: None,
+             agent_process_acquisition_pending: false,
+             pending_agent_resume_plan: None,
++            next_agent_prompt_submission: 0,
++            agent_prompt_submission: None,
++        }
++    }
++
++    pub(crate) fn agent_prompt_pending(&self) -> bool {
++        self.agent_prompt_submission.is_some()
++    }
++
++    pub(crate) fn reserve_agent_prompt(&mut self, now: Instant) -> u64 {
++        self.next_agent_prompt_submission += 1;
++        let id = self.next_agent_prompt_submission;
++        let submission =
++            self.agent_prompt_submission
++                .get_or_insert_with(|| AgentPromptSubmission {
++                    reserved_at: now,
++                    pending_writes: std::collections::HashSet::new(),
++                    last_written_at: None,
++                    activity_observed_at: None,
++                });
++        submission.reserved_at = now;
++        submission.pending_writes.insert(id);
++        id
++    }
++
++    pub(crate) fn cancel_unqueued_agent_prompt(&mut self, id: u64) {
++        if let Some(submission) = self.agent_prompt_submission.as_mut() {
++            submission.pending_writes.remove(&id);
++            if submission.pending_writes.is_empty() && submission.last_written_at.is_none() {
++                self.agent_prompt_submission = None;
++            }
++        }
++        self.release_observed_agent_prompt();
++    }
++
++    pub(crate) fn finish_agent_prompt_write(&mut self, id: u64, written_at: Instant) {
++        if let Some(submission) = self.agent_prompt_submission.as_mut() {
++            if submission.pending_writes.remove(&id) {
++                submission.last_written_at = Some(
++                    submission
++                        .last_written_at
++                        .map_or(written_at, |last| last.max(written_at)),
++                );
++            }
++        }
++        self.release_observed_agent_prompt();
++    }
++
++    fn observe_agent_prompt_activity(&mut self, state: AgentState, observed_at: Instant) {
++        if matches!(state, AgentState::Working | AgentState::Blocked) {
++            if let Some(submission) = self.agent_prompt_submission.as_mut() {
++                submission.activity_observed_at = Some(
++                    submission
++                        .activity_observed_at
++                        .map_or(observed_at, |last| last.max(observed_at)),
++                );
++            }
++            self.release_observed_agent_prompt();
++        }
++    }
++
++    fn release_observed_agent_prompt(&mut self) {
++        if self
++            .agent_prompt_submission
++            .as_ref()
++            .is_some_and(|submission| {
++                submission.pending_writes.is_empty()
++                    && submission
++                        .last_written_at
++                        .zip(submission.activity_observed_at)
++                        .is_some_and(|(written_at, activity)| activity > written_at)
++            })
++        {
++            self.agent_prompt_submission = None;
+         }
+     }
+ 
+@@ -399,6 +483,13 @@ impl TerminalState {
+         self.fallback_visible_blocker = visible_blocker && fallback_state == AgentState::Blocked;
+         self.fallback_observed_at = Some(now);
+         if process_exited {
++            if self
++                .agent_prompt_submission
++                .as_ref()
++                .is_some_and(|submission| submission.reserved_at < now)
++            {
++                self.agent_prompt_submission = None;
++            }
+             if let Some(agent) = agent {
+                 self.recent_agent_process_exit = Some(RecentAgentProcessExit {
+                     agent,
+@@ -2078,6 +2169,7 @@ impl TerminalState {
+     }
+ 
+     pub fn clear_agent_runtime_identity_after_respawn(&mut self) {
++        self.agent_prompt_submission = None;
+         self.detected_agent = None;
+         self.fallback_state = AgentState::Unknown;
+         self.fallback_visible_blocker = false;
+@@ -2172,6 +2264,20 @@ impl TerminalState {
+         };
+         let agent_label = self.effective_agent_label().map(str::to_string);
+         let known_agent = self.effective_known_agent();
++        if self.agent_prompt_submission.is_some() {
++            let observed_at = if self.visible_blocker_overrides_hook() {
++                self.fallback_observed_at
++            } else {
++                self.hook_authority
++                    .as_ref()
++                    .filter(|authority| self.hook_authority_is_effective(authority))
++                    .map(|authority| authority.reported_at)
++                    .or(self.fallback_observed_at)
++            };
++            if let Some(observed_at) = observed_at {
++                self.observe_agent_prompt_activity(state, observed_at);
++            }
++        }
+ 
+         let presentation = self.effective_presentation_for_state_at(state, now);
+         self.clear_expiry_pending_for_hidden_metadata();
+@@ -2233,6 +2339,114 @@ mod tests {
+         });
+     }
+ 
++    #[test]
++    fn agent_prompt_reservation_cancels_only_unqueued_ticket() {
++        let mut terminal = test_terminal();
++        let now = Instant::now();
++        let first = terminal.reserve_agent_prompt(now);
++        terminal.cancel_unqueued_agent_prompt(first);
++        assert!(!terminal.agent_prompt_pending());
++        let first = terminal.reserve_agent_prompt(now);
++        let second = terminal.reserve_agent_prompt(now + Duration::from_millis(1));
++        terminal.finish_agent_prompt_write(first, now + Duration::from_millis(2));
++        terminal.observe_agent_prompt_activity(AgentState::Working, now + Duration::from_millis(3));
++        terminal.cancel_unqueued_agent_prompt(first);
++        assert!(
++            terminal.agent_prompt_pending(),
++            "cancelling an absent ticket must preserve later queued writes"
++        );
++        terminal.cancel_unqueued_agent_prompt(second);
++        assert!(
++            !terminal.agent_prompt_pending(),
++            "a rejected enqueue must not hide the completed earlier submission"
++        );
++    }
++
++    #[test]
++    fn agent_prompt_reservation_requires_writes_and_fresh_activity() {
++        let mut terminal = TerminalState::new(TerminalId::alloc(), PathBuf::new());
++        let now = Instant::now();
++        terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
++        let first = terminal.reserve_agent_prompt(now);
++        let second = terminal.reserve_agent_prompt(now + Duration::from_millis(1));
++        terminal.observe_agent_prompt_activity(AgentState::Working, now);
++        terminal.finish_agent_prompt_write(first, now + Duration::from_millis(1));
++        assert!(terminal.agent_prompt_pending());
++        terminal.observe_agent_prompt_activity(AgentState::Working, now + Duration::from_millis(2));
++        assert!(
++            terminal.agent_prompt_pending(),
++            "queued legacy Enter is still pending"
++        );
++        terminal.finish_agent_prompt_write(first, now + Duration::from_millis(3));
++        assert!(
++            terminal.agent_prompt_pending(),
++            "duplicate completion must be ignored"
++        );
++        terminal.finish_agent_prompt_write(second, now + Duration::from_millis(3));
++        assert!(
++            terminal.agent_prompt_pending(),
++            "activity before the last Enter cannot release the reservation"
++        );
++        terminal.observe_agent_prompt_activity(AgentState::Working, now + Duration::from_millis(4));
++        assert!(!terminal.agent_prompt_pending());
++    }
++
++    #[test]
++    fn agent_prompt_reservation_does_not_expire_on_idle_or_write_completion() {
++        let mut terminal = TerminalState::new(TerminalId::alloc(), PathBuf::new());
++        let now = Instant::now();
++        let ticket = terminal.reserve_agent_prompt(now);
++        terminal.finish_agent_prompt_write(ticket, now);
++        terminal.observe_agent_prompt_activity(AgentState::Idle, now + Duration::from_secs(86_400));
++        terminal
++            .observe_agent_prompt_activity(AgentState::Unknown, now + Duration::from_secs(86_400));
++        assert!(terminal.agent_prompt_pending());
++        terminal
++            .observe_agent_prompt_activity(AgentState::Blocked, now + Duration::from_secs(86_401));
++        assert!(!terminal.agent_prompt_pending());
++    }
++
++    #[test]
++    fn agent_prompt_reservation_ignores_completion_before_respawn() {
++        let mut terminal = TerminalState::new(TerminalId::alloc(), PathBuf::new());
++        let now = Instant::now();
++        let old = terminal.reserve_agent_prompt(now);
++        terminal.clear_agent_runtime_identity_after_respawn();
++        let new = terminal.reserve_agent_prompt(now + Duration::from_millis(1));
++        terminal.observe_agent_prompt_activity(AgentState::Working, now + Duration::from_millis(2));
++        terminal.finish_agent_prompt_write(old, now);
++        assert!(terminal.agent_prompt_pending());
++        terminal.finish_agent_prompt_write(new, now + Duration::from_millis(1));
++        assert!(!terminal.agent_prompt_pending());
++    }
++
++    #[test]
++    fn agent_prompt_reservation_clears_only_on_fresh_process_exit() {
++        let mut terminal = TerminalState::new(TerminalId::alloc(), PathBuf::new());
++        let now = Instant::now();
++        terminal.reserve_agent_prompt(now);
++        terminal.set_detected_state_with_screen_signals_at(
++            Some(Agent::Pi),
++            AgentState::Unknown,
++            false,
++            false,
++            false,
++            true,
++            now - Duration::from_millis(1),
++        );
++        assert!(terminal.agent_prompt_pending());
++        terminal.set_detected_state_with_screen_signals_at(
++            Some(Agent::Pi),
++            AgentState::Unknown,
++            false,
++            false,
++            false,
++            true,
++            now + Duration::from_millis(1),
++        );
++        assert!(!terminal.agent_prompt_pending());
++    }
++
+     #[test]
+     fn managed_agent_readiness_tracks_detection_state() {
+         let mut terminal = test_terminal();
+diff --git i/tests/cli/agent_transport.rs w/tests/cli/agent_transport.rs
+index a052f69..aa5d703 100644
+--- i/tests/cli/agent_transport.rs
++++ w/tests/cli/agent_transport.rs
+@@ -218,66 +218,71 @@ fn agent_start_does_not_retry_after_the_target_terminal_changes() {
+ 
+ #[test]
+ fn prompt_wait_is_sent_as_one_agent_request() {
+-    let base = unique_test_dir();
+-    fs::create_dir_all(&base).unwrap();
+-    let socket_path = base.join("herdr.sock");
+-    let listener = UnixListener::bind(&socket_path).unwrap();
++    for (command, method) in [
++        ("prompt", "agent.prompt"),
++        ("prompt-if-idle", "agent.prompt_if_idle"),
++    ] {
++        let base = unique_test_dir();
++        fs::create_dir_all(&base).unwrap();
++        let socket_path = base.join("herdr.sock");
++        let listener = UnixListener::bind(&socket_path).unwrap();
+ 
+-    let server = thread::spawn(move || {
+-        let (mut prompt_stream, prompt_line) = accept_fake_cli_operation(&listener);
+-        let prompt: serde_json::Value = serde_json::from_str(&prompt_line).unwrap();
+-        assert_eq!(prompt["method"], "agent.prompt");
+-        assert_eq!(prompt["params"]["target"], "w1:p1");
+-        assert_eq!(
+-            prompt["params"]["wait"]["until"],
+-            serde_json::json!(["idle"])
+-        );
+-        assert!(prompt["params"]["wait"].get("timeout_ms").is_none());
+-        writeln!(
+-            prompt_stream,
+-            "{}",
+-            serde_json::json!({
+-                "id": prompt["id"],
+-                "result": {
+-                    "type": "agent_prompted",
+-                    "agent": {
+-                        "pane_id": "w1:p1",
+-                        "terminal_id": "term_1",
+-                        "name": "reviewer",
+-                        "agent": "pi",
+-                        "agent_status": "idle",
+-                        "workspace_id": "w1",
+-                        "tab_id": "w1:t1",
+-                        "focused": true,
+-                        "revision": 0
++        let server = thread::spawn(move || {
++            let (mut prompt_stream, prompt_line) = accept_fake_cli_operation(&listener);
++            let prompt: serde_json::Value = serde_json::from_str(&prompt_line).unwrap();
++            assert_eq!(prompt["method"], method);
++            assert_eq!(prompt["params"]["target"], "w1:p1");
++            assert_eq!(
++                prompt["params"]["wait"]["until"],
++                serde_json::json!(["idle"])
++            );
++            assert!(prompt["params"]["wait"].get("timeout_ms").is_none());
++            writeln!(
++                prompt_stream,
++                "{}",
++                serde_json::json!({
++                    "id": prompt["id"],
++                    "result": {
++                        "type": "agent_prompted",
++                        "agent": {
++                            "pane_id": "w1:p1",
++                            "terminal_id": "term_1",
++                            "name": "reviewer",
++                            "agent": "pi",
++                            "agent_status": "idle",
++                            "workspace_id": "w1",
++                            "tab_id": "w1:t1",
++                            "focused": true,
++                            "revision": 0
++                        }
+                     }
+-                }
+-            })
+-        )
+-        .unwrap();
+-        prompt_stream.flush().unwrap();
+-    });
++                })
++            )
++            .unwrap();
++            prompt_stream.flush().unwrap();
++        });
+ 
+-    let prompted = run_cli(
+-        &socket_path,
+-        &[
+-            "agent",
+-            "prompt",
+-            "w1:p1",
+-            "review this",
+-            "--wait",
+-            "--until",
+-            "idle",
+-        ],
+-    );
+-    assert!(
+-        prompted.status.success(),
+-        "stderr: {}",
+-        String::from_utf8_lossy(&prompted.stderr)
+-    );
+-    let prompted: serde_json::Value = serde_json::from_slice(&prompted.stdout).unwrap();
+-    assert_eq!(prompted["result"]["agent"]["name"], "reviewer");
++        let prompted = run_cli(
++            &socket_path,
++            &[
++                "agent",
++                command,
++                "w1:p1",
++                "review this",
++                "--wait",
++                "--until",
++                "idle",
++            ],
++        );
++        assert!(
++            prompted.status.success(),
++            "stderr: {}",
++            String::from_utf8_lossy(&prompted.stderr)
++        );
++        let prompted: serde_json::Value = serde_json::from_slice(&prompted.stdout).unwrap();
++        assert_eq!(prompted["result"]["agent"]["name"], "reviewer");
+ 
+-    server.join().unwrap();
+-    cleanup_test_base(&base);
++        server.join().unwrap();
++        cleanup_test_base(&base);
++    }
+ }

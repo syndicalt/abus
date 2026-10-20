@@ -1,0 +1,48 @@
+{
+  "rows": 1000,
+  "receivers": 1,
+  "payload_text_bytes": 65000,
+  "source_sha256": "ba1924fbf02cfbed75417f5f390df098f691226e9594c3d12bc0be578012b17a",
+  "python": "3.12.14",
+  "send": {
+    "median_ms": 0.2,
+    "p95_ms": 0.289
+  },
+  "inbox": {
+    "median_ms": 3.728,
+    "p95_ms": 4.301
+  },
+  "history": {
+    "median_ms": 3.472,
+    "p95_ms": 3.625
+  },
+  "pending": {
+    "median_ms": 0.037,
+    "p95_ms": 0.048
+  },
+  "cleanup": {
+    "median_ms": 0.024,
+    "p95_ms": 0.034
+  },
+  "dashboard": {
+    "median_ms": 7.586,
+    "p95_ms": 8.023
+  },
+  "storage": {
+    "database_bytes": 65871872,
+    "wal_bytes": 66327912,
+    "inbox_page_bytes": 1044182
+  },
+  "api": {
+    "clients": 1,
+    "elapsed_ms": 8.019,
+    "p95_ms": 7.667,
+    "max_loop_delay_ms": 0.885
+  },
+  "delivery": {
+    "slow_destinations": 25,
+    "each_delay_ms": 50,
+    "healthy_latency_ms": 153.736
+  },
+  "peak_rss_kib": 48704
+}

@@ -11,10 +11,10 @@ One systemd user service owns ABUS. Python asyncio serves local NDJSON, coordina
 | HTTP backend | `127.0.0.1:8744` |
 | Database | `$XDG_STATE_HOME/omarchy/abus/abus.db` |
 | Installed code | `$XDG_CONFIG_HOME/omarchy/plugins/syndicalt.abus` |
-| Dependencies | `$XDG_DATA_HOME/abus/venv` |
+| Dependencies | `$XDG_DATA_HOME/abus/environments/<lock-hash>-py312` |
 | Unit | `$XDG_CONFIG_HOME/systemd/user/abus.service` |
 
-XDG state/data/config default to `~/.local/state`, `~/.local/share`, and `~/.config`. Without an XDG runtime directory, a private `/tmp/abus-<uid>` directory is used. Storage directories are 0700. SQLite uses WAL; one daemon owns writes. An advisory lock prevents a second daemon from replacing a live socket. Only stale sockets are removed; ordinary files are preserved.
+XDG state/data/config default to `~/.local/state`, `~/.local/share`, and `~/.config`. Without an XDG runtime directory, a private `/tmp/abus-<uid>` directory is used. Existing runtime directories must be user-owned, private, and not symlinks. Storage directories are 0700. SQLite uses WAL and FULL synchronization; one daemon owns writes. An advisory lock is acquired before opening or migrating the database. Only stale sockets are removed; ordinary files are preserved.
 
 systemd restarts the daemon after failure. Workers are supervised. Quickshell may reload independently. Shutdown cancels external subprocesses and closes sockets. Persistent messages, receipts, subscriptions, and retry schedules survive restarts.
 
@@ -26,31 +26,23 @@ Receivers claim messages exclusively with leases. `listen` renews during work, a
 
 Transient delivery failures retry with exponential backoff capped at 300 seconds. Permanent errors remain failed until an agent retries them. Queued messages do not overtake earlier queued messages for the same destination. Messages expire after seven days or when displaced by the newest 1,000 for their destination. The same retention bounds offline retries and deduplication.
 
+Up to eight destinations progress concurrently, with one in-flight delivery per destination. Local inbox readers wait on recipient-specific events or the next claim expiry. Sending trims only the affected destination. Expired messages are invisible immediately; maintenance deletes them in batches of 64. Reads do not perform retention writes. Transactional counters serve unread/state totals, and persisted sequence numbers keep pagination cursors monotonic through deletion and restart. Schema migrations commit atomically after a foreign-key check.
+
 Broadcast subscriptions create a receipt per subscriber for future messages. Each consumer has independent acknowledgment/claim state. Unsubscribing stops future deliveries; unregistering removes the agent's subscriptions but retains existing receipts until message retention removes them.
 
 Registration and presence are distinct. An inbox poll, claim, or heartbeat refreshes a 90-second presence lease. Observer reads do not refresh presence, acknowledge, or claim. Minute traffic totals are stored separately so inbox count pruning does not erase traffic measurements.
 
 ## Network
 
-The exact exposure command is:
+`omarchy abus expose on|off` uses LocalAPI `GET /localapi/v0/serve-config` and a conditional `POST` with the returned ETag in `If-Match`. A concurrent change returns a conflict for inspection and retry. Ownership requires an exact root proxy to the configured backend and an HTTPS listener; a matching substring or another mount is insufficient. Other ports and mounts are preserved. Inspection failure is reported as unknown exposure, and normal uninstall requires verified disabled exposure before removing files.
 
-```bash
-tailscale serve --bg --https=8743 http://127.0.0.1:8744
-```
-
-To disable only ABUS's handler:
-
-```bash
-tailscale serve --bg --https=8743 off
-```
-
-ABUS checks existing Serve configuration before changing its port. It never resets other handlers. `ABUS_NETWORK_PORT` and `ABUS_HTTP_PORT` configure the tailnet HTTPS and local backend ports through the service environment. Receiving peers must agree on the discovery HTTPS port.
+`ABUS_NETWORK_PORT` and `ABUS_HTTP_PORT` configure the tailnet HTTPS and local backend ports through the service environment. Receiving peers must agree on the discovery HTTPS port.
 
 A loopback HTTP backend avoids Serve's requirement for privileged Unix-socket/path serving. Tailscale Serve supplies forwarded source headers. Before accepting a send or discovery request, ABUS resolves `X-Forwarded-For` through `/localapi/v0/whois?addr=<source>` on `/var/run/tailscale/tailscaled.sock`. The returned node DNS name determines the sender's namespace. This works for user-owned and tagged nodes. Local processes are trusted, matching Serve's localhost identity-header model; ABUS is designed for a personal Omarchy account.
 
 The remote API offers `GET /v1/status`, authenticated `GET /v1/list`, and authenticated `POST /v1/send`. It cannot register recipients, read inboxes, acknowledge deliveries, change exposure, or relay a message to a third machine. Network reachability is governed by Tailscale grants. No agent token is needed.
 
-`tailscale status --json` supplies known peers. ABUS probes online peers' well-known HTTPS endpoints concurrently with bounded deadlines. Only responding ABUS services are returned. Transport retries keep the original message ID, so a lost response does not duplicate the destination inbox.
+`tailscale status --json` supplies known peers. Pooled HTTP connections and eight discovery workers bound resource use. Discovery has a 20-second deadline and a shared 15-second cache, with timestamps and partial-result errors. Only responding ABUS services are returned. Transport retries keep the original message ID, so a lost response does not duplicate the destination inbox. A successful forwarding response must confirm the same message ID, a recognized delivery state, and a boolean duplicate flag before the outbox is marked forwarded.
 
 ## Native monitor
 
