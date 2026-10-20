@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "syndicalt.abus",
+  "name": "ABUS",
+  "version": "1.0.0",
+  "author": "syndicalt",
+  "license": "MIT",
+  "description": "Durable agent messaging with a native desktop app",
+  "kinds": ["service", "bar-widget"],
+  "entryPoints": {"service": "plugin/Service.qml", "barWidget": "plugin/BarWidget.qml"},
+  "barWidget": {"displayName": "ABUS", "category": "Agents", "allowMultiple": false, "defaultSection": "right"}
+}

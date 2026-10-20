@@ -1,59 +1,11 @@
 #!/usr/bin/env python3
-"""omarchy abus CLI — talks to the ABUS socket."""
-import json
-import os
-import socket
 import sys
 from pathlib import Path
 
-SOCKET = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "abus.sock"
+for parent in Path(__file__).resolve().parents:
+    if (parent / "abus/__init__.py").is_file():
+        sys.path.insert(0, str(parent))
+        break
+from abus.cli import main
 
-def call(method, params=None):
-    if not SOCKET.exists():
-        print("ABUS not running. Is the omarchy.abus plugin enabled?", file=sys.stderr)
-        sys.exit(1)
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.connect(str(SOCKET))
-    req = {"id": "1", "method": method, "params": params or {}}
-    s.sendall((json.dumps(req) + "\n").encode())
-    data = s.recv(65536).decode()
-    s.close()
-    return json.loads(data)
-
-def main():
-    if len(sys.argv) < 2:
-        print("Usage: omarchy abus <command> ...")
-        print("Commands: register, unregister, send, inbox, ack, list, machines, expose, status")
-        sys.exit(1)
-    cmd = sys.argv[1]
-
-    if cmd == "register":
-        name = sys.argv[2]
-        r = call("register", {"name": name})
-        print(json.dumps(r, indent=2))
-    elif cmd == "send":
-        to = sys.argv[2]
-        typ = sys.argv[3]
-        payload = json.loads(sys.argv[4]) if len(sys.argv) > 4 else {}
-        r = call("send", {"to": to, "type": typ, "payload": payload, "from": "cli"})
-        print(json.dumps(r, indent=2))
-    elif cmd == "inbox":
-        name = sys.argv[2] if len(sys.argv) > 2 else None
-        r = call("inbox", {"name": name})
-        print(json.dumps(r, indent=2))
-    elif cmd == "ack":
-        r = call("ack", {"id": sys.argv[2]})
-        print(json.dumps(r, indent=2))
-    elif cmd == "list":
-        r = call("list")
-        print(json.dumps(r, indent=2))
-    elif cmd == "status":
-        print("ABUS socket:", SOCKET, "exists" if SOCKET.exists() else "missing")
-    elif cmd == "expose":
-        print("Tailscale Serve: run 'tailscale serve --bg $XDG_RUNTIME_DIR/abus.sock' or use the plugin UI (MVP stub)")
-    else:
-        print(f"Unknown command: {cmd}")
-        sys.exit(1)
-
-if __name__ == "__main__":
-    main()
+main()

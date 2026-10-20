@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Minimal MCP server exposing ABUS tools."""
-# Stub for MVP — wire to the same socket as the CLI.
-# Full implementation can use the mcp package.
+import sys
+from pathlib import Path
 
-print("ABUS MCP server stub. See docs for tool list:")
-print("- abus_register")
-print("- abus_send")
-print("- abus_inbox")
-print("- abus_list")
-print("- abus_ack")
+for parent in Path(__file__).resolve().parents:
+    if (parent / "abus/__init__.py").is_file():
+        sys.path.insert(0, str(parent))
+        break
+from abus.mcp import main
+
+main()

@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "omarchy-abus"
+version = "1.0.0"
+description = "Durable agent messaging and a native Omarchy desktop app"
+requires-python = ">=3.11"
+dependencies = ["aiohttp>=3.12,<4", "mcp>=1.20,<2"]
+
+[project.scripts]
+omarchy-abus = "abus.cli:main"
+abusd = "abus.daemon:main"
+abus-mcp = "abus.mcp:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["abus"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"ui" = "abus/resources/ui"
+"bin" = "abus/resources/bin"
+"mcp" = "abus/resources/mcp"
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=1", "ruff>=0.14"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "B", "I", "UP"]
