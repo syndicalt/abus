@@ -1,21 +1,14 @@
 import QtQuick
-import Quickshell
 import Quickshell.Io
 
 Item {
-    id: root
-
-    property Process daemon: Process {
-        command: ["python3", Quickshell.shellDir + "/../plugin/bin/abusd.py"]
+    // systemd owns the daemon, so shell reloads never destroy durable delivery.
+    Process {
+        command: ["systemctl", "--user", "start", "abus.service"]
         running: true
-        onExited: (code) => {
-            console.warn("abusd exited", code)
-            // restart after short delay
-            Qt.callLater(() => daemon.running = true)
+        onExited: function(code) {
+            if (code !== 0) console.warn("ABUS: install the user service with python3", Qt.resolvedUrl("../install.py"), "before enabling this plugin");
+            else console.log("ABUS: user service started");
         }
-    }
-
-    Component.onCompleted: {
-        console.log("ABUS service started")
     }
 }

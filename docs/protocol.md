@@ -1,28 +1,45 @@
-# ABUS Protocol (v1)
+# Local protocol v1
 
-Newline-delimited JSON over Unix socket.
-
-## Request
+NDJSON over `$XDG_RUNTIME_DIR/abus.sock` (0600). Multiple requests may share a connection. Each request has one newline-terminated response. A request is limited to 256 KiB; JSON payload objects are limited to 64 KiB. Clients must read through the response newline, not one fixed-size socket read.
 
 ```json
-{"id": "1", "method": "send", "params": {"to": "agent:foo", "type": "prompt", "payload": {"text": "hi"}}}
+{"id":"request-1","method":"send","params":{"to":"agent:reviewer","from":"agent:coordinator","type":"request","corr":"review-1","payload":{"text":"Review this"}}}
 ```
+
+Success: `{"id":"request-1","result":{"id":"message-id","state":"accepted","duplicate":false}}`.
+
+Errors: `{"id":"request-1","error":{"code":"unregistered","message":"Recipient agent:reviewer is not registered"}}`. A malformed request whose ID cannot be read has `id:null`. Invalid parameters, conflicts, unknown methods, and unavailable integrations return explicit errors.
+
+## Envelope
+
+```json
+{"v":1,"id":"message-id","from":"agent:coordinator","to":"agent:reviewer","type":"request","corr":"review-1","ts":1792512000,"payload":{"text":"Review this"},"state":"accepted","attempts":0,"last_error":null}
+```
+
+`ts` is Unix seconds assigned on persistence. Types: `prompt`, `reply`, `status`, `event`, `request`, `ack`. `corr` links application requests and replies; it is independent of the transport request ID. `send.params.id` is an optional stable message ID for idempotent retries.
+
+Addresses: `agent:<name>`, `herdr:<pane-id>`, `agent:<machine>/<name>`, `herdr:<machine>/<pane-id>`, `broadcast:status`, and `broadcast:events`.
 
 ## Methods
 
-- `register` — `{name, capabilities?}`
-- `send` — `{to, type, payload, from?, corr?}`
-- `inbox` — `{name?}`
-- `ack` — `{id}`
-- `list`
+| Method | Parameters |
+|---|---|
+| register | name; optional capabilities array, project, session, local herdr endpoint |
+| unregister / heartbeat | name |
+| send | to, type; optional payload object, from, corr, id |
+| inbox | name; optional limit 1..100, after cursor, wait 0..25, observer, include_acked |
+| claim | name, owner; optional limit, after, wait, lease 5..3600 seconds |
+| ack / release / renew | id; name for broadcasts, owner for active claims |
+| subscribe / unsubscribe | name, topic |
+| list | no parameters |
+| status / machines | no parameters |
+| history | optional to, limit 1..100, before cursor |
+| retry | id of queued or failed delivery |
+| expose | enabled boolean |
+| dashboard | optional name, include_acked; always observes without changing presence/receipts |
 
-## Message types
+`inbox`/`claim` return messages, next, more, total, owner. Advance `after=next` while `more=true`; start at zero on the next polling cycle. Observers can inspect active claims and each receipt's acknowledged/claimed flags. `claim` refuses observer/history mode. `history` returns newest first; pass `before=next` while more=true.
 
-`prompt`, `reply`, `status`, `event`, `request`, `ack`
+Delivery states: `accepted` (local mailbox stored), `queued` (pending external delivery), `notified` (Herdr inbox notification submitted), `submitted` (direct pane submission succeeded), `forwarded` (remote bus accepted), `acked` (direct receiver acknowledged), `failed` (permanent delivery error). Broadcast acknowledgment is per receipt, not a global message state.
 
-## Addressing
-
-- `agent:<registered-name>`
-- `herdr:<pane-id>`
-- `broadcast:status`
-- `broadcast:events`
+The API trusts processes with access to the local user's socket. Agent names are routing identities, not a local multi-tenant authorization boundary.

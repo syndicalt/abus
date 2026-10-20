@@ -1,0 +1,5 @@
+module Abus
+singleton Theme 1.0 Theme.qml
+Backend 1.0 Backend.qml
+TrafficChart 1.0 TrafficChart.qml
+RouteMap 1.0 RouteMap.qml
