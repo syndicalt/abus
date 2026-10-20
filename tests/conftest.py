@@ -17,4 +17,9 @@ async def bus(tmp_path, monkeypatch):
     try:
         yield daemon
     finally:
-        await daemon.close()
+        try:
+            for task in daemon.tasks:
+                if task.done() and not task.cancelled():
+                    task.result()
+        finally:
+            await daemon.close()

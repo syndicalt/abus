@@ -97,11 +97,16 @@ def test_exclusive_claim_release_expiry_and_renewal(store):
     assert store.inbox(params, claim=True)["messages"]
 
 
-def test_expired_messages_are_pruned_on_read_without_any_send(store):
+def test_expired_messages_are_hidden_on_read_and_collected_by_maintenance(store):
     mid = send(store)["id"]
     store.db.execute("UPDATE messages SET ts=? WHERE id=?", (int(time.time()) - 8 * 86400, mid))
     store.db.commit()
-    assert store.inbox({"name": "alpha"})["messages"] == []
+    before = store.db.total_changes
+    assert store.inbox({"name": "alpha", "observer": True})["messages"] == []
+    assert store.history({})["messages"] == []
+    assert store.agents()[0]["unread"] == 0
+    assert store.db.total_changes == before
+    assert store.sweep() == 1
     assert not store.db.execute("SELECT * FROM receipts").fetchall()
 
 
@@ -109,13 +114,13 @@ def test_retention_keeps_newest_at_equal_timestamps_and_paginates_large_inbox(st
     now = int(time.time())
     with store.db:
         store.db.executemany(
-            """INSERT INTO messages(id,from_agent,to_agent,type,ts,payload)
-            VALUES (?,'test','agent:alpha','event',?,?)""",
-            [(f"bulk-{i}", now, json.dumps({"text": "x" * 2000})) for i in range(1005)],
+            """INSERT INTO messages(seq,id,from_agent,to_agent,type,ts,payload)
+            VALUES (?,?,'test','agent:alpha','event',?,?)""",
+            [(i + 1, f"bulk-{i}", now, json.dumps({"text": "x" * 2000})) for i in range(1005)],
         )
         store.db.executemany(
-            "INSERT INTO receipts(message_id,consumer) VALUES (?,'alpha')",
-            [(f"bulk-{i}",) for i in range(1005)],
+            "INSERT INTO receipts(message_id,consumer,seq) VALUES (?,'alpha',?)",
+            [(f"bulk-{i}", i + 1) for i in range(1005)],
         )
     store.prune()
     messages, after = [], 0

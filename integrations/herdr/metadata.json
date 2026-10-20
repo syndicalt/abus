@@ -1,0 +1,7 @@
+{
+  "upstream": "https://github.com/herdrdev/herdr",
+  "base_tag": "v0.9.1",
+  "base_commit": "065ef9d6a531c49fb8bee7e818ef837065b21ee9",
+  "patch_sha256": "006537b5375dfa96050cd50b025b79cfe964f109fb1c3d969c0bdfecad516b20",
+  "license": "Apache-2.0"
+}

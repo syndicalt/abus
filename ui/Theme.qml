@@ -16,12 +16,21 @@ Item {
     property color error: "#f38ba8"
     function load() {
         var raw = colors.text();
-        var keys = {background: "background", dark_background: "surface", lighter_background: "raised",
-                    foreground: "foreground", dark_foreground: "muted", accent: "accent",
-                    green: "good", yellow: "warning", red: "error"};
+        var keys = {
+            background: "background",
+            dark_background: "surface",
+            lighter_background: "raised",
+            foreground: "foreground",
+            dark_foreground: "muted",
+            accent: "accent",
+            green: "good",
+            yellow: "warning",
+            red: "error"
+        };
         for (var key in keys) {
             var match = raw.match(new RegExp("^" + key + "\\s*=\\s*\"(#[0-9a-fA-F]{6})\"", "m"));
-            if (match) root[keys[key]] = match[1];
+            if (match)
+                root[keys[key]] = match[1];
         }
     }
     FileView {

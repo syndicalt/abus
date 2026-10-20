@@ -55,15 +55,21 @@ async def abus_send(
 
 
 @server.tool()
-async def abus_inbox(name: str, limit: int = 100, after: int = 0, wait: float = 0) -> dict:
+async def abus_inbox(
+    name: str, limit: int = 10, after: int = 0, wait: float = 0, max_bytes: int = 262144
+) -> dict:
     """Read unacknowledged messages. Follow next while more=true. wait is 0..25 seconds."""
-    return await rpc("inbox", name=name, limit=limit, after=after, wait=wait)
+    return await rpc("inbox", name=name, limit=limit, after=after, wait=wait, max_bytes=max_bytes)
 
 
 @server.tool()
-async def abus_claim(name: str, owner: str, limit: int = 1, lease: int = 60, wait: float = 0) -> dict:
+async def abus_claim(
+    name: str, owner: str, limit: int = 1, lease: int = 60, wait: float = 0, max_bytes: int = 262144
+) -> dict:
     """Claim messages for an exclusive receiver. Supply owner again on ack or renewal."""
-    return await rpc("claim", name=name, owner=owner, limit=limit, lease=lease, wait=wait)
+    return await rpc(
+        "claim", name=name, owner=owner, limit=limit, lease=lease, wait=wait, max_bytes=max_bytes
+    )
 
 
 @server.tool()
@@ -73,9 +79,9 @@ async def abus_ack(id: str, name: str | None = None, owner: str | None = None) -
 
 
 @server.tool()
-async def abus_renew(id: str, name: str, owner: str) -> dict:
-    """Extend a receiver claim by 60 seconds while doing work."""
-    return await rpc("renew", id=id, name=name, owner=owner)
+async def abus_renew(id: str, name: str, owner: str, lease: int = 60) -> dict:
+    """Keep a live claim until at least now plus lease seconds, without shortening it."""
+    return await rpc("renew", id=id, name=name, owner=owner, lease=lease)
 
 
 @server.tool()
@@ -121,9 +127,17 @@ async def abus_heartbeat(name: str) -> dict:
 
 
 @server.tool()
-async def abus_history(to: str | None = None, limit: int = 100, before: int = 0) -> dict:
+async def abus_history(
+    to: str | None = None, limit: int = 10, before: int = 0, max_bytes: int = 262144
+) -> dict:
     """Inspect retained envelopes and delivery errors. Follow next while more=true to read older messages."""
-    return await rpc("history", to=to, limit=limit, before=before)
+    return await rpc("history", to=to, limit=limit, before=before, max_bytes=max_bytes)
+
+
+@server.tool()
+async def abus_message(id: str) -> dict:
+    """Read one complete retained envelope without changing presence, claims or acknowledgments."""
+    return await rpc("message", id=id)
 
 
 @server.tool()

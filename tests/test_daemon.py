@@ -16,12 +16,12 @@ async def rpc(bus, method, **params):
     return await asyncio.to_thread(call, method, params, config=bus.config)
 
 
-async def test_real_socket_permissions_and_restart_persistence(bus):
+async def test_real_socket_permissions_and_committed_messages(bus):
     for path in (bus.config.socket, bus.config.http_socket):
         assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
     await rpc(bus, "register", name="durable")
     mid = (await rpc(bus, "send", to="agent:durable", type="prompt", corr="task-1"))["id"]
-    # A separate Store opened after orderly shutdown proves data is on disk.
+    # A separate connection sees committed messages while the daemon is running.
     from abus.store import Store
 
     reopened = Store(bus.config.state / "abus.db")
@@ -48,10 +48,8 @@ async def test_malformed_requests_return_errors_and_keep_connection_usable(bus):
 
 
 async def test_second_daemon_cannot_unlink_live_socket(bus):
-    second = Bus(bus.config)
     with pytest.raises(RuntimeError, match="already owns"):
-        await second.start()
-    await second.close()
+        Bus(bus.config)
     assert (await rpc(bus, "dashboard"))["status"]["service"] == "abus"
 
 
@@ -82,7 +80,8 @@ async def test_herdr_delivery_is_queued_until_idle_and_only_submitted_once(bus, 
     bridge = Herdr()
     bridge.panes = [{"address": "herdr:w1:p1", "pane_id": "w1:p1", "status": "working"}]
     bus.herdr = bridge
-    prompt = AsyncMock(return_value='{"result":{"type":"ok"}}')
+    monkeypatch.setattr(bridge, "refresh", AsyncMock())
+    prompt = AsyncMock(return_value='{"result":{"type":"agent_prompted"}}')
     monkeypatch.setattr("abus.herdr.command", prompt)
     mid = (
         await rpc(bus, "send", to="herdr:w1:p1", type="prompt", payload={"text": "a 'quote' ; $(literal)"})
@@ -93,7 +92,7 @@ async def test_herdr_delivery_is_queued_until_idle_and_only_submitted_once(bus, 
     assert bus.store.history({})["messages"][0]["state"] == "queued"
     bridge.panes[0]["status"] = "idle"
     await bus.deliver(row)
-    assert prompt.call_args.args[:4] == ("herdr", "agent", "prompt", "w1:p1")
+    assert prompt.call_args.args[:4] == ("herdr", "agent", "prompt-if-idle", "w1:p1")
     assert "$(literal)" in prompt.call_args.args[4]
     assert bus.store.db.execute("SELECT state FROM messages WHERE id=?", (mid,)).fetchone()[0] == "submitted"
     assert not bus.store.pending()

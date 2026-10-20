@@ -8,13 +8,14 @@ import signal
 import stat
 import time
 
-from aiohttp import web
+from aiohttp import ClientError, web
 
 from . import __version__
 from .config import BusError, Config
 from .herdr import Herdr
 from .network import Network
-from .store import Store, address, text
+from .protocol import loads
+from .store import SWEEP_BATCH, Store, address, agent_name, text
 
 log = logging.getLogger("abus")
 
@@ -23,72 +24,108 @@ class Bus:
     def __init__(self, config):
         self.config = config
         config.prepare()
-        self.store = Store(config.state / "abus.db")
+        descriptor = os.open(config.runtime / "abus.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        self.lock = os.fdopen(descriptor, "a+")
+        try:
+            fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            self.lock.close()
+            raise RuntimeError("Another ABUS daemon already owns this runtime directory") from error
+        try:
+            self.store = Store(config.state / "abus.db")
+        except BaseException:
+            self.lock.close()
+            raise
         self.herdr = Herdr(os.environ.get("ABUS_HERDR_SESSION"))
         self.network = Network(config, self.store)
-        self.changed = asyncio.Event()
+        self.waiters = {}
+        self.delivery_changed = asyncio.Event()
         self.started = time.time()
         self.tasks = []
         self.server = None
         self.runner = None
-        self.lock = None
+        self.clients = {}
+        self.gateway_clients = 0
 
-    def notify(self):
-        previous = self.changed
-        self.changed = asyncio.Event()
-        previous.set()
+    def notify(self, mid=None, *, name=None):
+        self.delivery_changed.set()
+        names = [agent_name(name)] if name else self.store.consumers(mid) if mid else list(self.waiters)
+        for recipient in names:
+            for event in self.waiters.get(recipient, ()):
+                event.set()
 
-    def health(self):
+    def health(self, agents=None):
         return {
             "service": "abus",
             "version": __version__,
             "machine": self.network.machine,
             "socket": str(self.config.socket),
             "uptime": int(time.time() - self.started),
-            "agents": len(self.store.agents()),
+            "agents": len(self.store.agents() if agents is None else agents),
             "messages": self.store.counts(),
             "herdr": {"panes": len(self.herdr.panes), "error": self.herdr.error},
             "network_error": self.network.error,
+            "network_updated_at": self.network.last_refresh,
+            "clients": len(self.clients),
         }
 
     async def dispatch(self, method, p):
         if not isinstance(p, dict):
             raise BusError("invalid_params", "params must be an object")
         if method == "register":
-            return self.store.register(p)
+            result = self.store.register(p)
+            self.notify(name=result["name"])
+            return result
         if method == "unregister":
-            return self.store.unregister(p)
+            result = self.store.unregister(p)
+            self.notify(name=p.get("name"))
+            return result
         if method == "heartbeat":
             return self.store.heartbeat(p)
         if method in {"subscribe", "unsubscribe"}:
             return self.store.subscribe(p, remove=method == "unsubscribe")
         if method == "send":
             result = self.store.send(p)
-            self.notify()
+            self.notify(result["id"])
             return result
         if method in {"inbox", "claim"}:
             wait = p.get("wait", 0)
             if type(wait) not in {int, float} or not 0 <= wait <= 25:
                 raise BusError("invalid_params", "wait must be 0..25 seconds")
-            # Capture Event before reading so a send cannot be lost between the two.
+            if not wait:
+                return self.store.inbox(p, claim=method == "claim")
+            name = agent_name(p.get("name"))
+            event = asyncio.Event()
+            self.waiters.setdefault(name, set()).add(event)
             deadline = time.monotonic() + wait
-            while True:
-                event = self.changed
-                result = self.store.inbox(p, claim=method == "claim")
-                remaining = deadline - time.monotonic()
-                if result["messages"] or remaining <= 0:
-                    break
-                with contextlib.suppress(TimeoutError):
-                    await asyncio.wait_for(event.wait(), min(remaining, 1))
-            return result
+            try:
+                while True:
+                    # Clear before reading; Store never yields between the query and this wait.
+                    event.clear()
+                    result = self.store.inbox(p, claim=method == "claim")
+                    remaining = deadline - time.monotonic()
+                    if result["messages"] or remaining <= 0:
+                        return result
+                    lease_delay = self.store.claim_delay(name)
+                    timeout = min(remaining, lease_delay) if lease_delay is not None else remaining
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(event.wait(), timeout)
+            finally:
+                self.waiters[name].remove(event)
+                if not self.waiters[name]:
+                    del self.waiters[name]
         if method in {"ack", "release", "renew"}:
-            return self.store.ack(p, release=method == "release", renew=method == "renew")
+            result = self.store.ack(p, release=method == "release", renew=method == "renew")
+            self.notify(p.get("id"), name=p.get("name"))
+            return result
         if method == "list":
             return {"agents": self.store.agents(), "herdr": self.herdr.panes, "herdr_error": self.herdr.error}
         if method == "status":
             return {**self.health(), "exposure": await self.network.exposure()}
         if method == "history":
             return self.store.history(p)
+        if method == "message":
+            return self.store.message(p)
         if method == "retry":
             result = self.store.retry(p)
             self.notify()
@@ -101,17 +138,18 @@ class Bus:
                 raise BusError("invalid_params", "enabled must be a boolean")
             return await self.network.expose(enabled)
         if method == "dashboard":
+            agents = self.store.agents()
             activity = self.store.history({"limit": 100, "before": p.get("activity_before", 0)})
             return {
-                "status": self.health(),
+                "status": self.health(agents),
                 "agent_name": p.get("name"),
-                "agents": self.store.agents(),
+                "agents": agents,
                 "herdr": self.herdr.panes,
                 "inbox": self.store.inbox(
                     {
                         "name": p["name"],
                         "observer": True,
-                        "include_acked": bool(p.get("include_acked")),
+                        "include_acked": p.get("include_acked", False),
                         "after": p.get("inbox_after", 0),
                     }
                 )
@@ -129,6 +167,14 @@ class Bus:
         try:
             if not isinstance(req, dict):
                 raise BusError("invalid_request", "Request must be an object")
+            if rid is not None and type(rid) not in (str, int):
+                rid = None
+                raise BusError("invalid_request", "id must be a string, integer, or null")
+            if type(rid) is int and not -(2**63) <= rid < 2**63:
+                rid = None
+                raise BusError("invalid_request", "integer id must fit in 64 bits")
+            if isinstance(rid, str):
+                text(rid, "id", 128)
             method = text(req.get("method"), "method", 32)
             result = await self.dispatch(method, req.get("params", {}))
             return {"id": rid, "result": result}
@@ -144,34 +190,51 @@ class Bus:
             }
 
     async def handle(self, reader, writer):
+        task = asyncio.current_task()
         try:
+            if len(self.clients) >= 128:
+                writer.write(b'{"id":null,"error":{"code":"busy","message":"Too many local clients"}}\n')
+                await asyncio.wait_for(writer.drain(), 2)
+                return
+            self.clients[task] = writer
             while True:
                 try:
                     line = await asyncio.wait_for(reader.readline(), 35)
                     if not line:
                         break
-                    req = json.loads(
-                        line, parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value))
-                    )
+                    req = loads(line)
                     response = await self.request(req)
-                except (ValueError, UnicodeError) as e:
+                except (ValueError, UnicodeError, RecursionError) as e:
                     response = {"id": None, "error": {"code": "parse_error", "message": str(e)[:200]}}
-                writer.write((json.dumps(response, allow_nan=False) + "\n").encode())
-                await writer.drain()
+                writer.write((json.dumps(response, allow_nan=False, separators=(",", ":")) + "\n").encode())
+                await asyncio.wait_for(writer.drain(), 5)
         except (ConnectionError, TimeoutError):
             pass
         finally:
+            self.clients.pop(task, None)
             writer.close()
-            with contextlib.suppress(ConnectionError):
-                await writer.wait_closed()
+            try:
+                await asyncio.wait_for(writer.wait_closed(), 1)
+            except (ConnectionError, TimeoutError):
+                writer.transport.abort()
 
     async def http_status(self, request):
         return web.json_response({"service": "abus", "version": __version__, "machine": self.network.machine})
 
+    @web.middleware
+    async def gateway_limit(self, request, handler):
+        if self.gateway_clients >= 32:
+            return web.json_response({"error": {"code": "busy", "message": "Gateway is busy"}}, status=503)
+        self.gateway_clients += 1
+        try:
+            return await handler(request)
+        finally:
+            self.gateway_clients -= 1
+
     async def http_send(self, request):
         try:
             principal = await self.network.principal(request.headers)
-            params = await request.json()
+            params = await asyncio.wait_for(request.json(loads=loads), 5)
             if not isinstance(params, dict):
                 raise BusError("invalid_params", "Expected an object")
             _, machine, _ = address(params.get("to"))
@@ -179,11 +242,11 @@ class Bus:
                 raise BusError("forbidden", "Remote relaying is not allowed")
             params["from"] = self.network.remote_sender(text(params.get("from", "cli"), "from"), principal)
             result = self.store.send(params, origin=principal["machine"])
-            self.notify()
+            self.notify(result["id"])
             return web.json_response({"result": result})
         except BusError as e:
             return web.json_response({"error": e.as_dict()}, status=403 if e.code == "forbidden" else 400)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, RecursionError, TimeoutError):
             return web.json_response(
                 {"error": {"code": "invalid_params", "message": "Invalid JSON payload"}}, status=400
             )
@@ -228,23 +291,42 @@ class Bus:
                     self.store.delivered(row["id"], "accepted")
         except asyncio.CancelledError:
             raise
-        except Exception as e:
+        except (BusError, ClientError, TimeoutError) as e:
             permanent = isinstance(e, BusError) and e.code in {
                 "invalid_params",
-                "unregistered",
                 "id_conflict",
                 "forbidden",
             }
             self.store.failed(row["id"], str(e) or type(e).__name__, permanent)
+            log.warning("Delivery %s to %s: %s", row["id"], envelope["to"], str(e) or type(e).__name__)
 
     async def maintenance(self):
-        while True:
-            self.store.prune()
-            # Sequential delivery preserves order to each destination; external IO
-            # is async, so local clients remain responsive throughout retries.
-            for row in self.store.pending():
-                await self.deliver(row)
-            await asyncio.sleep(0.5)
+        active = {}
+        next_sweep = 0.0
+        wake = None
+        try:
+            while True:
+                for task in list(active):
+                    if task.done():
+                        del active[task]
+                        await task
+                self.delivery_changed.clear()
+                if time.monotonic() >= next_sweep:
+                    removed = self.store.sweep()
+                    next_sweep = time.monotonic() + (0 if removed == SWEEP_BATCH else 60)
+                slots = self.config.delivery_concurrency - len(active)
+                if slots:
+                    for row in self.store.pending(limit=slots, exclude=tuple(active.values())):
+                        active[asyncio.create_task(self.deliver(row))] = row["to_agent"]
+                wake = asyncio.create_task(self.delivery_changed.wait())
+                timeout = 0 if next_sweep <= time.monotonic() else 0.5
+                await asyncio.wait([wake, *active], timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+                wake.cancel()
+                await asyncio.gather(wake, return_exceptions=True)
+        finally:
+            for task in [*active, *([wake] if wake else [])]:
+                task.cancel()
+            await asyncio.gather(*active, *([wake] if wake else []), return_exceptions=True)
 
     async def discovery(self):
         previous = {}
@@ -253,12 +335,12 @@ class Bus:
             current = {p["address"]: p for p in self.herdr.panes}
             for target, pane in current.items():
                 if previous.get(target) != pane:
-                    self.store.send(
+                    sent = self.store.send(
                         {"to": "broadcast:status", "from": target, "type": "status", "payload": pane}
                     )
-                    self.notify()
+                    self.notify(sent["id"])
             for target in previous.keys() - current.keys():
-                self.store.send(
+                sent = self.store.send(
                     {
                         "to": "broadcast:status",
                         "from": target,
@@ -266,18 +348,11 @@ class Bus:
                         "payload": {"address": target, "status": "offline"},
                     }
                 )
-                self.notify()
+                self.notify(sent["id"])
             previous = current
             await asyncio.sleep(self.config.poll_interval)
 
     async def start(self):
-        self.lock = open(self.config.runtime / "abus.lock", "a+")
-        try:
-            fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as e:
-            self.lock.close()
-            self.lock = None
-            raise RuntimeError("Another ABUS daemon already owns this runtime directory") from e
         for path in (self.config.socket, self.config.http_socket):
             if path.exists():
                 if not stat.S_ISSOCK(path.stat().st_mode):
@@ -286,11 +361,11 @@ class Bus:
         await self.network.start()
         self.server = await asyncio.start_unix_server(self.handle, path=str(self.config.socket), limit=262144)
         os.chmod(self.config.socket, 0o600)
-        app = web.Application(client_max_size=262144)
+        app = web.Application(client_max_size=262144, middlewares=[self.gateway_limit])
         app.router.add_get("/v1/status", self.http_status)
         app.router.add_post("/v1/send", self.http_send)
         app.router.add_get("/v1/list", self.http_list)
-        self.runner = web.AppRunner(app, access_log=None)
+        self.runner = web.AppRunner(app, access_log=None, shutdown_timeout=5)
         await self.runner.setup()
         await web.UnixSite(self.runner, str(self.config.http_socket)).start()
         os.chmod(self.config.http_socket, 0o600)
@@ -299,11 +374,15 @@ class Bus:
         self.tasks = [
             asyncio.create_task(self.maintenance()),
             asyncio.create_task(self.discovery()),
-            asyncio.create_task(self.network.refresh()),
+            asyncio.create_task(self.network.monitor()),
         ]
         log.info("ABUS %s listening on %s", __version__, self.config.socket)
 
     async def close(self):
+        for task, writer in list(self.clients.items()):
+            writer.close()
+            task.cancel()
+        await asyncio.gather(*list(self.clients), return_exceptions=True)
         for task in self.tasks:
             task.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)
@@ -318,6 +397,7 @@ class Bus:
             for path in (self.config.socket, self.config.http_socket):
                 path.unlink(missing_ok=True)
             self.lock.close()
+            self.lock = None
 
 
 async def run():
@@ -331,7 +411,7 @@ async def run():
         await bus.start()
         stop_task = asyncio.create_task(stopped.wait())
         try:
-            done, _ = await asyncio.wait([stop_task, *bus.tasks[:2]], return_when=asyncio.FIRST_COMPLETED)
+            done, _ = await asyncio.wait([stop_task, *bus.tasks], return_when=asyncio.FIRST_COMPLETED)
             for task in done:
                 if task is not stop_task:
                     await task

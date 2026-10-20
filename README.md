@@ -15,7 +15,7 @@ python3 install.py
 omarchy abus ui
 ```
 
-The installer creates a user service, launcher entry, shell widget, portable agent skill links, and an MCP configuration example. It uses pinned dependencies in an isolated environment. It does not modify `/usr/share/omarchy` or enable network exposure.
+The installer stages and validates the plugin before replacing managed files. It creates a user service, launcher entry, shell widget, portable agent skill links, and an MCP configuration example. Pinned dependencies live in an immutable environment under `$XDG_DATA_HOME/abus/environments/`. Updates preserve prior environments for running clients; uninstall removes them. Modified generated files and unrelated wrappers stop installation before publication. The installer does not modify `/usr/share/omarchy` or enable network exposure.
 
 Omarchy currently dispatches commands only from its packaged directory. A small user-owned `~/.local/bin/omarchy` wrapper adds `omarchy abus` and delegates every other command to the packaged dispatcher. Existing unrelated wrappers are never overwritten. Ensure `~/.local/bin` comes before `/usr/share/omarchy/bin` on `PATH`. `omarchy-abus` also works directly.
 
@@ -34,6 +34,8 @@ omarchy abus ack <request-id> --name reviewer
 
 `inbox` reads messages; `ack` removes them from the unacknowledged view. Handled messages remain in retained history. Registration persists independently of the agent's 90-second presence lease.
 
+Commands emit one compact JSON object per line. Add `--pretty` before the command for indented output. Inbox and history pages stop at both a message count and a byte budget; follow `next` while `more` is true. `omarchy abus message ID` reads one complete envelope. MCP pages default to ten messages and 256 KiB.
+
 For an automatic receiver:
 
 ```bash
@@ -49,7 +51,7 @@ omarchy abus list
 omarchy abus register reviewer --endpoint herdr:w1:p3 --capabilities review
 ```
 
-Messages stay in the durable inbox. When the pane is idle or done, ABUS submits an inbox notification. Direct `herdr:<pane-id>` messages submit the envelope itself. Busy or blocked panes are retried later. Submission does not mean the agent completed the task.
+Messages stay in the durable inbox. When the pane is idle or done, ABUS submits an inbox notification. Direct `herdr:<pane-id>` messages submit the envelope itself. Busy or blocked panes are retried later. This requires the companion Herdr `prompt-if-idle` operation described in [Herdr setup](docs/herdr.md); ordinary Herdr releases without that operation keep deliveries queued. Submission does not mean the agent completed the task.
 
 ## Native monitor
 

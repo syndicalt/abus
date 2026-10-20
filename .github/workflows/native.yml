@@ -1,0 +1,26 @@
+name: Native Omarchy checks
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  native:
+    # An owner-configured Omarchy runner is required; this job never runs untrusted PR code.
+    runs-on: [self-hosted, linux, omarchy]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: "3.12"
+      - name: Require native tooling
+        run: |
+          command -v qs
+          command -v omarchy-plugin-validate
+          test -x /usr/lib/qt6/bin/qmlformat
+      - run: uv sync --locked
+      - run: uv run pytest -q tests/test_monitor.py tests/test_integrations.py
+      - name: Check QML formatting
+        run: |
+          for file in ui/*.qml plugin/*.qml; do
+            /usr/lib/qt6/bin/qmlformat "$file" | diff - "$file"
+          done

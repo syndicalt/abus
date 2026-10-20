@@ -18,14 +18,21 @@ async def verify():
     if os.environ.get("HERDR_ENV") != "1":
         raise RuntimeError("Run this verification from inside Herdr")
     name = "abus-check-" + uuid.uuid4().hex[:8]
+    binary = os.environ.get("ABUS_HERDR_BIN", "herdr")
     # Explicitly selected test session must not inherit the caller's socket/IDs.
-    for key in ("HERDR_SOCKET_PATH", "HERDR_PANE_ID", "HERDR_TAB_ID", "HERDR_WORKSPACE_ID"):
+    for key in (
+        "HERDR_SOCKET_PATH",
+        "HERDR_CLIENT_SOCKET_PATH",
+        "HERDR_PANE_ID",
+        "HERDR_TAB_ID",
+        "HERDR_WORKSPACE_ID",
+    ):
         os.environ.pop(key, None)
     os.environ["ABUS_HERDR_SESSION"] = name
 
     async def herdr(*args):
         p = await asyncio.create_subprocess_exec(
-            "herdr", "--session", name, *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            binary, "--session", name, *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         out, err = await asyncio.wait_for(p.communicate(), 10)
         if p.returncode:
@@ -39,7 +46,7 @@ async def verify():
         root = Path(directory)
         log = (root / "server.log").open("w+")
         server = await asyncio.create_subprocess_exec(
-            "herdr", "--session", name, "server", stdout=log, stderr=log
+            binary, "--session", name, "server", stdout=log, stderr=log
         )
         bus = None
         created = False
@@ -71,13 +78,15 @@ async def verify():
             captured = root / "received.txt"
             receiver = root / "receiver.py"
             receiver.write_text(
-                """import os,sys,subprocess
-subprocess.run(['herdr','pane','report-agent',os.environ['HERDR_PANE_ID'],'--source','abus-test','--agent','codex','--state','idle'],check=True)
+                """import os,sys,subprocess,time
+subprocess.run([os.environ.get('ABUS_HERDR_BIN','herdr'),'pane','report-agent',os.environ['HERDR_PANE_ID'],'--source','abus-test','--agent','codex','--state','idle'],check=True)
 with open("""
                 + repr(str(captured))
                 + """,'w',buffering=1) as stream:
     for line in sys.stdin:
         stream.write(line)
+        time.sleep(1)
+        subprocess.run([os.environ.get('ABUS_HERDR_BIN','herdr'),'pane','report-agent',os.environ['HERDR_PANE_ID'],'--source','abus-test','--agent','codex','--state','working'],check=True)
 """
             )
             actor = root / "codex"
@@ -104,6 +113,19 @@ with open("""
                 }
             )["id"]
             for _ in range(100):
+                if captured.exists() and mid in captured.read_text():
+                    break
+                await asyncio.sleep(0.02)
+            else:
+                raise RuntimeError("Controlled receiver did not receive the first prompt")
+            try:
+                await herdr("agent", "prompt-if-idle", pane, "must stay rejected")
+            except RuntimeError as error:
+                if "agent_prompt_pending" not in str(error) and "agent_not_idle" not in str(error):
+                    raise
+            else:
+                raise RuntimeError("Herdr accepted a second prompt before observed activity")
+            for _ in range(100):
                 state = bus.store.db.execute("SELECT state FROM messages WHERE id=?", (mid,)).fetchone()[0]
                 if state == "submitted" and captured.exists() and mid in captured.read_text():
                     break
@@ -111,7 +133,32 @@ with open("""
             else:
                 raise RuntimeError("Herdr delivery failed: " + json.dumps(bus.store.history({})))
             assert "$(not-a-command)" in captured.read_text()
-            print("Live Herdr discovery, literal argv delivery, and pane submission: PASS")
+            assert "must stay rejected" not in captured.read_text()
+            second = bus.store.send({"to": f"herdr:{pane}", "type": "event"})["id"]
+            for status in ("working", "blocked"):
+                await herdr(
+                    "pane",
+                    "report-agent",
+                    pane,
+                    "--source",
+                    "abus-test",
+                    "--agent",
+                    "codex",
+                    "--state",
+                    status,
+                )
+                await bus.dispatch("retry", {"id": second})
+                for _ in range(100):
+                    message = bus.store.message({"id": second})
+                    if message["last_error"] and status in message["last_error"]:
+                        break
+                    await asyncio.sleep(0.02)
+                else:
+                    raise RuntimeError(f"Busy {status} pane was not retained in queue: {message}")
+                assert message["state"] == "queued" and second not in captured.read_text()
+            print(
+                "Live Herdr discovery, literal delivery, atomic duplicate guard and working/blocked queueing: PASS"
+            )
         except BaseException as error:
             print("Verification failure:", error)
             raise

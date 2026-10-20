@@ -26,6 +26,8 @@ Compare `herdr agent list` with `omarchy abus list`. Pane names, IDs, status, an
 
 `uv run python scripts/verify_herdr.py` creates and removes an isolated Herdr session with a controlled receiver. It checks actual discovery, idle-pane submission, and literal argument handling without prompting an existing agent.
 
+The refactored adapter requires the [companion Herdr operation](../integrations/herdr/README.md). Set `ABUS_HERDR_BIN` to that build before running this script; the unmodified 0.9.1 binary is expected to reject submission.
+
 ## Tailscale
 
 On two authorized test machines, enable exposure on the receiver, register a dedicated receiving agent, and discover it from the sender. Send with an explicit ID, repeat that ID, and check that the receiver has one envelope and a machine-qualified return address. Take the receiver offline and verify the sender keeps a queued outbox item and retries after recovery. Reply with the original correlation ID. Disable only the ABUS handler afterward.
@@ -34,13 +36,23 @@ A same-machine test through the actual Tailscale HTTPS URL verifies Serve config
 
 `scripts/verify_virtual_peer.py --meta <metadata.json>` runs the real HTTPS round trip and outage recovery against a prepared disposable VM. Its metadata identifies the SSH key and known-hosts directory. The VM needs a restartable `abus-validation` unit, an authorized Tailscale node, and a Tailscale state directory for certificates. See the script's module documentation for expected paths.
 
-## Verified on 2026-10-20
+## Original verification on 2026-10-20
 
 The working tree based on `c8a6bae` passed all 40 automated tests on Omarchy with Python 3.12 and Quickshell installed. Ruff, formatting, plugin validation, desktop-file validation, systemd unit validation, and wheel/source builds passed. An isolated wheel installation opened the native monitor and connected through the MCP SDK.
 
 Live checks passed for Herdr discovery and controlled pane submission, persistence after killing the daemon, systemd recovery, and delivery service survival through a full Omarchy shell restart. A separate Ubuntu 24.04 KVM guest passed real Tailscale HTTPS discovery, message delivery, source-node identity, duplicate suppression, correlated reply, acknowledgments, offline queueing, and automatic retry after service recovery. The guest was logged out and deleted afterward; host ABUS exposure was disabled.
 
 These checks cover one Omarchy desktop and one Ubuntu VM. A second physical Omarchy desktop and upstream GitHub Actions were not exercised.
+
+## Refactor verification
+
+The later refactor is recorded separately in [refactor validation](refactor-validation.md). Historical external checks above describe their original source revision; they do not establish live tailnet coverage for every later change.
+
+`uv run python scripts/verify_installed.py` runs the actual installer under a temporary HOME, provisions pinned dependencies, validates the generated plugin/desktop/unit, starts a uniquely named transient systemd user unit, opens the installed native monitor offscreen, and calls the installed MCP adapter. It verifies that inbox inspection leaves claims, acknowledgments and presence unchanged, then kills only its own service with SIGKILL and checks automatic restart and the same retained message. It stops that unit and removes only its temporary install, retaining its temporary history until the test directory is cleaned up. It never reloads the user's shell or replaces the active ABUS service.
+
+`uv run python scripts/benchmark.py` compares 100 mailboxes and 100,000 retained messages with real receipts. Use `--checkout /path/to/baseline` for the same workload against another source tree, `--rows`/`--receivers` for scale, or `--payload-bytes 65000 --rows 1000 --receivers 1` for near-maximum payloads. The script reports latency, a 100-client batch, event-loop delay, isolation from simulated slow destinations, database/WAL size and peak process RSS. Its temporary database uses the filesystem backing `/tmp`; these timings are not a disk-throughput or cross-machine latency guarantee.
+
+Ubuntu CI checks Python 3.11 and 3.12, lint/format, tests, distribution builds and runtime lock consistency. The manually dispatched native workflow additionally requires an owner-configured Omarchy runner. Local success does not establish that GitHub runners were configured or executed.
 
 ## Removal
 
