@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "omarchy.abus",
+  "name": "ABUS",
+  "version": "0.1.0",
+  "author": "syndicalt",
+  "description": "Omarchy Agent Bus — durable messaging for agents",
+  "kinds": ["service"],
+  "entryPoints": {
+    "service": "Service.qml"
+  }
+}
