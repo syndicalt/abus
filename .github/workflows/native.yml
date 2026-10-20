@@ -19,6 +19,8 @@ jobs:
           test -x /usr/lib/qt6/bin/qmlformat
       - run: uv sync --locked
       - run: uv run pytest -q tests/test_monitor.py tests/test_integrations.py
+      - run: uv run python scripts/verify_installed.py
+      - run: uv run python scripts/verify_marketplace.py
       - name: Check QML formatting
         run: |
           for file in ui/*.qml plugin/*.qml; do

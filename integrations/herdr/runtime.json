@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "protocol": 22,
+  "runtime_version": "0.9.5-abus.d5f7a850d84a",
+  "upstream": {
+    "repository": "https://github.com/herdrdev/herdr",
+    "tag": "v0.9.5",
+    "commit": "2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01"
+  },
+  "patch_sha256": "d5f7a850d84ae8e3ebd8983e78b526b23bab3308b0a5b3ea26a90b7d80e0cb44",
+  "artifacts": {
+    "linux-x86_64": {
+      "sha256": "faab4128736d1691fb3407c1719b3d18dd2abc95d9f8da17df591d0d5a0c77d9",
+      "url": "https://github.com/syndicalt/abus/releases/download/herdr-companion-0.9.5-abus.d5f7a850d84a/herdr-0.9.5-abus.d5f7a850d84a-linux-x86_64"
+    }
+  }
+}

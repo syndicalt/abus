@@ -9,17 +9,19 @@ The monitor is read-only. Opening an inbox never acknowledges messages, acquires
 Requires Omarchy with Quickshell, systemd user services, Python, and `uv`. Herdr and Tailscale are optional integrations.
 
 ```bash
-git clone https://github.com/syndicalt/abus.git
-cd abus
-python3 install.py
+omarchy plugin add https://github.com/syndicalt/abus.git --enable
 omarchy abus ui
 ```
 
-The installer stages and validates the plugin before replacing managed files. It creates a user service, launcher entry, shell widget, portable agent skill links, and an MCP configuration example. Pinned dependencies live in an immutable environment under `$XDG_DATA_HOME/abus/environments/`. Updates preserve prior environments for running clients; uninstall removes them. Modified generated files and unrelated wrappers stop installation before publication. The installer does not modify `/usr/share/omarchy` or enable network exposure.
+First activation runs a supervised `abus-setup.service` job. It validates the plugin, provisions pinned Python dependencies and the verified private Herdr companion, then creates the daemon service, launcher, widget, agent skill links and MCP configuration. Allow the first setup to finish before using the CLI. The monitor displays setup progress and failures; details are in `journalctl --user -u abus-setup.service`. Network exposure stays off.
 
-Omarchy currently dispatches commands only from its packaged directory. A small user-owned `~/.local/bin/omarchy` wrapper adds `omarchy abus` and delegates every other command to the packaged dispatcher. Existing unrelated wrappers are never overwritten. Ensure `~/.local/bin` comes before `/usr/share/omarchy/bin` on `PATH`. `omarchy-abus` also works directly.
+Update with `omarchy plugin update syndicalt.abus`; activation provisions changed files and restarts the bus. Reloading an unchanged shell component starts an inactive service without restarting an active one. Runtime code and dependencies live in versioned directories under `$XDG_DATA_HOME/abus/releases/` and `environments/`; prior versions remain available to existing clients. Modified generated files and unrelated wrappers stop setup before publication. The installer never modifies `/usr/share/omarchy`.
 
-To update, pull this checkout and rerun `python3 install.py`. A checkout installed with `omarchy plugin add ... --enable` still needs `python3 ~/.config/omarchy/plugins/syndicalt.abus/install.py` to provision its dependencies, CLI, and user service.
+Omarchy currently dispatches commands only from its packaged directory. A user-owned `~/.local/bin/omarchy` wrapper adds `omarchy abus` and delegates other commands to the packaged dispatcher. Ensure `~/.local/bin` comes before `/usr/share/omarchy/bin` on `PATH`; `omarchy-abus` also works directly. Existing unrelated wrappers are preserved.
+
+For development, clone the repository and run `python3 install.py`. `--herdr-artifact /path/to/executable` supports offline companion provisioning with the same pinned checksum. `--without-herdr` installs mailbox messaging without downloading or handing off to a managed companion. This choice survives updates; use `--with-herdr` to enable it later.
+
+Remove with `omarchy plugin remove syndicalt.abus`. A supervised cleanup job disables ABUS exposure and removes its services and managed files after plugin removal; it retries if exposure cannot be verified. Message history is retained. The private Herdr executable is retained because an existing session may still use it. Herdr sessions are never stopped by ABUS removal.
 
 ## Agent communication
 
@@ -32,7 +34,7 @@ omarchy abus send agent:coordinator reply '{"text":"Review complete"}' --from re
 omarchy abus ack <request-id> --name reviewer
 ```
 
-`inbox` reads messages; `ack` removes them from the unacknowledged view. Handled messages remain in retained history. Registration persists independently of the agent's 90-second presence lease.
+`inbox` reads messages; `ack` removes them from the unacknowledged view. Handled messages remain in retained history. Registration persists independently of the agent's 90-second presence lease. `omarchy abus list` reports registered agents, their `online` status and capabilities, plus discovered Herdr panes. Polling an inbox or sending a heartbeat renews presence; a quiet agent may remain registered while offline.
 
 Commands emit one compact JSON object per line. Add `--pretty` before the command for indented output. Inbox and history pages stop at both a message count and a byte budget; follow `next` while `more` is true. `omarchy abus message ID` reads one complete envelope. MCP pages default to ten messages and 256 KiB.
 
@@ -51,7 +53,7 @@ omarchy abus list
 omarchy abus register reviewer --endpoint herdr:w1:p3 --capabilities review
 ```
 
-Messages stay in the durable inbox. When the pane is idle or done, ABUS submits an inbox notification. Direct `herdr:<pane-id>` messages submit the envelope itself. Busy or blocked panes are retried later. This requires the companion Herdr `prompt-if-idle` operation described in [Herdr setup](docs/herdr.md); ordinary Herdr releases without that operation keep deliveries queued. Submission does not mean the agent completed the task.
+Messages stay in the durable inbox. When the pane is idle or done, ABUS submits an inbox notification. Direct `herdr:<pane-id>` messages submit the envelope itself. Busy or blocked panes are retried later. Setup supplies a verified companion runtime and ABUS performs a live handoff for supported stock Herdr versions, preserving panes and their processes. It verifies the running server’s idle-only capability before submitting. Unsupported or failed handoffs remain visible and deliveries stay queued; see [Herdr setup](docs/herdr.md). Submission does not mean the agent completed the task.
 
 ## Native monitor
 
@@ -70,7 +72,7 @@ The installer writes `~/.local/share/abus/mcp.json` with the exact command and a
 
 The server exposes registration, sending, reading, claims, acknowledgments, subscriptions, presence, delivery retry, history, machines, health, and authorized network exposure. Adapters share the daemon's durable inboxes; they do not start separate buses.
 
-`skill/SKILL.md` is portable across skill-aware harnesses. The installer links it into `~/.codex/skills/abus`, `~/.claude/skills/abus`, and `~/.agents/skills/abus` if those names are unused. Other harnesses can link the same directory into their skill search path.
+`skill/SKILL.md` is portable across skill-aware harnesses. The installer links it into `~/.codex/skills/abus`, `~/.claude/skills/abus`, `~/.agents/skills/abus`, and `~/.omp/agent/skills/abus` if those names are unused. In an already running OMP session, use `/reload-plugins` and then `/skill:abus` to refresh its skill catalog. Other harnesses can link the same directory into their skill search path.
 
 ## Tailscale
 

@@ -63,7 +63,12 @@ class Bus:
             "uptime": int(time.time() - self.started),
             "agents": len(self.store.agents() if agents is None else agents),
             "messages": self.store.counts(),
-            "herdr": {"panes": len(self.herdr.panes), "error": self.herdr.error},
+            "herdr": {
+                "panes": len(self.herdr.panes),
+                "error": self.herdr.error,
+                "delivery_ready": self.herdr.delivery_ready,
+                "runtime_version": self.herdr.runtime_version,
+            },
             "network_error": self.network.error,
             "network_updated_at": self.network.last_refresh,
             "clients": len(self.clients),

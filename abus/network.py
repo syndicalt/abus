@@ -75,7 +75,7 @@ class Network:
             headers={"Accept-Encoding": "identity"},
         )
         self.local = aiohttp.ClientSession(
-            connector=aiohttp.UnixConnector(path="/var/run/tailscale/tailscaled.sock", limit=8),
+            connector=aiohttp.UnixConnector(path=self.config.tailscale_socket, limit=8),
             timeout=aiohttp.ClientTimeout(total=4),
         )
 

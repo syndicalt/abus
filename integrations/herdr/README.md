@@ -1,29 +1,34 @@
-# Herdr idle-only submission
+# Managed Herdr companion
 
-This local companion patch adds `herdr agent prompt-if-idle` and the distinct JSON method `agent.prompt_if_idle`. ABUS requires this operation for pane delivery. Existing `agent.prompt` behavior and frozen endpoint codecs are preserved; older servers reject the new method instead of silently ignoring a guard flag.
+The companion adds `agent.prompt_if_idle` with a terminal reservation, the CLI command `herdr agent prompt-if-idle`, and a default-false JSON Pong capability. The running companion advertises `agent_prompt_if_idle: true`. Existing prompt semantics and frozen endpoint codecs remain intact. A pending prompt reservation prevents another live handoff from discarding the fence.
 
-Base: upstream [Herdr v0.9.1](https://github.com/herdrdev/herdr/tree/v0.9.1), commit `065ef9d6a531c49fb8bee7e818ef837065b21ee9`. The patch is maintained here for a private build; it has not been submitted or published upstream. Herdr code and patch context remain under Apache-2.0; see [LICENSE](LICENSE).
+Upstream: [Herdr v0.9.5](https://github.com/herdrdev/herdr/tree/v0.9.5), commit `2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01`. The private build is `0.9.5-abus.d5f7a850d84a`. The patch is maintained here and has not been submitted upstream. Herdr code and patch context are Apache-2.0; see [LICENSE](LICENSE) and [third-party notices](THIRD_PARTY_NOTICES.txt).
 
-Use a separate checkout and build directory. Herdr's pinned toolchain is Rust 1.96.1; its native dependency build also requires Zig 0.16.0. Install `just` and `cargo-nextest` for its validation recipes.
+[runtime.json](runtime.json) pins the published raw executable URL and SHA256. [provenance.json](provenance.json) records source, patch, compiler and build identity. The installer verifies the raw binary without extracting an archive and installs it under a digest-named private data directory. Stock binaries and sessions are not stopped or replaced on disk. Live handoffs from stock 0.9.1 and 0.9.5 are verified; the live server must confirm the new capability before submission.
+
+## Rebuilding
+
+Use a separate checkout. The upstream toolchain is Rust 1.96.1; native dependencies require Zig 0.16.0. Install `just` and `cargo-nextest` for validation.
 
 ```bash
-git clone --branch v0.9.1 --depth 1 https://github.com/herdrdev/herdr.git herdr-abus
+git clone --branch v0.9.5 --depth 1 https://github.com/herdrdev/herdr.git herdr-abus
 cd herdr-abus
-test "$(git rev-parse HEAD)" = 065ef9d6a531c49fb8bee7e818ef837065b21ee9
+test "$(git rev-parse HEAD)" = 2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01
 git apply --check /path/to/abus/integrations/herdr/0001-prompt-if-idle.patch
 git apply /path/to/abus/integrations/herdr/0001-prompt-if-idle.patch
-just test-one prompt
-just build
+just ci
+HERDR_BUILD_CHANNEL=abus HERDR_BUILD_ID=d5f7a850d84a \
+  HERDR_BUILD_COMMIT=2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01 just build
 ```
 
-Point `ABUS_HERDR_BIN` at the resulting binary, and run the selected Herdr session's server with that same build. `ABUS_HERDR_SESSION` selects its named session. This bundle does not replace the installed Herdr executable or restart an existing user's session. Verify it from the ABUS checkout:
+The committed checksum identifies the tested executable, not a claim that every rebuild is byte-identical. Rebuilding requires recording and validating a new artifact before changing the runtime manifest. Package the raw executable, source patch, license, third-party notices and provenance together in the ABUS companion release. Do not change an existing release asset in place.
 
-```bash
-ABUS_HERDR_BIN=/absolute/path/to/herdr-abus/target/release/herdr uv run python scripts/verify_herdr.py
-```
+The supplied third-party inventory contains license identifiers and actual notice texts from locked Linux dependencies, vendored native sources and build inputs. It preserves supplied notices; it is not a separate legal certification.
 
-The operation checks the server's current effective idle/done state and reserves the terminal before enqueueing any focus or prompt input. Another guarded submission is rejected while that reservation exists, including through another pane alias. A reservation clears only after pending writes finish and fresh authoritative working/blocked evidence follows the final Enter, or a verified process exit/replacement occurs. Idle observations and elapsed time alone do not clear it. Ambiguous write failures retain it; definitely rejected enqueueing releases its own ticket. Unmodified legacy submissions also participate in reservation tracking, while keeping their existing permission to submit to working agents.
+## Validation
 
-This guards atomic acceptance against Herdr's observed runtime state. It cannot establish an agent's internal idleness, prove which prompt caused a later state report, or prevent concurrent manual input. An agent that never reports activity can remain reserved; ABUS keeps subsequent messages queued with the reported error. Prompt delivery remains at least once across crashes; IDs support receiver deduplication.
+The port passed formatting, all-target Linux Clippy, the generated-schema check, and 24 independently reviewed capability, reservation, prompt, handoff, frozen-codec and method-shape checks. The normal full Rust run passed 4,041 tests with 14 ignored; one installed-Herdr fixture failure reproduced on clean upstream v0.9.5. That fixture passes with the global Herdr binary masked in an isolated namespace. The complete suite is not represented as green.
 
-See [refactor validation](../../docs/refactor-validation.md) for actual checks and their limits. `just check` includes Windows cross lint and requires a separately provisioned Windows SDK; the local verification did not install an SDK or accept its license.
+Maintenance passed 150 Python and five workflow JS checks; architecture six; assets 55; docs seven and translation parity. Windows cross lint requires an unavailable Windows SDK, so no Windows artifact is supplied.
+
+Disposable stock 0.9.1 and 0.9.5 handoffs preserved pane/socket identity, child PIDs and PTY input/output. Controlled actors verified unknown-state rejection, fresh idle acceptance, literal payload delivery, a duplicate fence before observed working, working/blocked rejection and refusal to hand off with a pending reservation. No existing user's sessions or global binaries were modified. The earlier v0.9.1-only patch's historical results remain in [refactor validation](../../docs/refactor-validation.md).

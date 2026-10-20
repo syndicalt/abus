@@ -4,7 +4,10 @@ import asyncio
 import json
 import os
 import shlex
+import time
+import uuid
 
+from . import companion
 from .config import BusError
 from .protocol import loads
 
@@ -54,6 +57,10 @@ class Herdr:
         self.prefix = [binary, "--session", session] if session else [binary]
         self.panes = []
         self.error = None
+        self.delivery_ready = False
+        self.socket = None
+        self.runtime_version = None
+        self._compat_next = 0
         self._refresh_lock = asyncio.Lock()
         self._prompt_locks = {}
 
@@ -83,7 +90,7 @@ class Herdr:
                 for p in data
                 if isinstance(p, dict) and (p.get("pane_id") or p.get("id"))
             ]
-            self.error = None
+            await self.ensure_runtime()
         except (BusError, ValueError, TimeoutError) as e:
             self.panes = []
             self.error = str(e) or "Herdr timed out"
@@ -92,6 +99,98 @@ class Herdr:
             target: lock for target, lock in self._prompt_locks.items() if target in known or lock.locked()
         }
         return self.panes
+
+    async def rpc(self, method, params=None, *, timeout=8):
+        if not self.socket:
+            raise BusError("unavailable", "Herdr server socket is not available")
+        writer = None
+        try:
+            async with asyncio.timeout(timeout):
+                reader, writer = await asyncio.open_unix_connection(self.socket, limit=4 * 1024 * 1024)
+                rid = str(uuid.uuid4())
+                request = {"id": rid, "method": method, "params": params or {}}
+                writer.write((json.dumps(request, ensure_ascii=True) + "\n").encode())
+                await writer.drain()
+                response = loads(await reader.readline())
+                if not isinstance(response, dict) or response.get("id") != rid:
+                    raise ValueError("Mismatched Herdr response")
+                if response.get("error"):
+                    error = response["error"]
+                    if not isinstance(error, dict):
+                        raise ValueError("Invalid Herdr error")
+                    raise BusError("external_error", f"Herdr {error.get('code')}: {error.get('message')}")
+                result = response.get("result")
+                if not isinstance(result, dict):
+                    raise ValueError("Missing Herdr result")
+                return result
+        except (OSError, ValueError, RecursionError) as error:
+            raise BusError("protocol_error", f"Herdr RPC failed: {error}") from error
+        finally:
+            if writer:
+                writer.close()
+                try:
+                    await asyncio.wait_for(writer.wait_closed(), 1)
+                except (OSError, TimeoutError):
+                    writer.transport.abort()
+
+    @staticmethod
+    def capable(pong):
+        return (
+            pong.get("type") == "pong"
+            and type(pong.get("protocol")) is int
+            and pong["protocol"] == 22
+            and isinstance(pong.get("capabilities"), dict)
+            and pong["capabilities"].get("agent_prompt_if_idle") is True
+        )
+
+    async def ensure_runtime(self):
+        if time.monotonic() < self._compat_next:
+            return
+        self.delivery_ready = False
+        self._compat_next = time.monotonic() + 15
+        try:
+            status = loads(await command(*self.prefix, "status", "--json", timeout=3))
+            if not isinstance(status, dict) or not isinstance(status.get("server"), dict):
+                raise ValueError("Invalid Herdr status")
+            server = status.get("server", {})
+            if not isinstance(server.get("socket"), str) or not server["socket"].startswith("/"):
+                raise ValueError("Herdr status did not identify an absolute server socket")
+            self.socket = server["socket"]
+            pong = await self.rpc("ping", timeout=3)
+            if pong.get("type") != "pong":
+                raise ValueError("Herdr server did not answer ping")
+            self.runtime_version = pong.get("version")
+            if not self.capable(pong):
+                if os.environ.get("ABUS_HERDR_MANAGED") == "0":
+                    raise RuntimeError("Managed Herdr handoff is disabled for this installation")
+                if pong.get("protocol") != 22 or pong.get("version") not in {"0.9.1", "0.9.5"}:
+                    raise RuntimeError("This Herdr runtime has not been verified for companion handoff")
+                record = await asyncio.to_thread(companion.installed)
+                await self.rpc(
+                    "server.live_handoff",
+                    {
+                        "import_exe": record["binary"],
+                        "expected_protocol": record["protocol"],
+                        "expected_version": record["runtime_version"],
+                    },
+                    timeout=30,
+                )
+                async with asyncio.timeout(10):
+                    while True:
+                        try:
+                            pong = await self.rpc("ping", timeout=1)
+                            if self.capable(pong) and pong.get("version") == record["runtime_version"]:
+                                break
+                        except (BusError, TimeoutError):
+                            pass
+                        await asyncio.sleep(0.1)
+                self.runtime_version = pong["version"]
+            self.delivery_ready = True
+            self.error = None
+        except (BusError, OSError, ValueError, RuntimeError, TimeoutError) as error:
+            self.error = (
+                f"Herdr pane delivery unavailable: {error}. See ABUS setup and abus-setup.service journal."
+            )
 
     async def prompt(self, target, envelope, agent=None):
         lock = self._prompt_locks.setdefault(target, asyncio.Lock())
@@ -107,6 +206,8 @@ class Herdr:
             raise BusError("unavailable", f"Herdr pane {target} is not available")
         if pane["status"] not in {"idle", "done"}:
             raise BusError("busy", f"Herdr pane is {pane['status']}; waiting for idle")
+        if not self.delivery_ready:
+            raise BusError("unavailable", self.error or "Herdr idle-only capability has not been verified")
         if agent:
             inbox_command = shlex.join(["omarchy", "abus", "inbox", "--", agent])
             ack_command = shlex.join(["omarchy", "abus", "ack", "--name", agent, "--", envelope["id"]])
@@ -123,26 +224,9 @@ class Herdr:
                 + "\nReply through `omarchy abus send <from> reply '<JSON>' --corr <corr-or-id>`. "
                 "A successful pane submission is not proof that the requested task is complete."
             )
-        raw = await command(
-            *self.prefix,
-            "agent",
-            "prompt-if-idle",
-            pane["pane_id"],
-            content,
-            "--wait",
-            "--until",
-            "working",
-            "--until",
-            "done",
-            "--until",
-            "blocked",
-            "--timeout",
-            "5000",
-            timeout=8,
-        )
+        response = await self.rpc("agent.prompt_if_idle", {"target": pane["pane_id"], "text": content})
         try:
-            response = loads(raw)
-            if not isinstance(response, dict) or response.get("result", {}).get("type") != "agent_prompted":
+            if response.get("type") != "agent_prompted":
                 raise ValueError("No Herdr submission confirmation")
         except (ValueError, AttributeError, RecursionError) as error:
             raise BusError("protocol_error", "Herdr did not confirm prompt submission") from error

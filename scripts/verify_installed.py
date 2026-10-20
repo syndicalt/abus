@@ -63,11 +63,12 @@ async def verify():
         with socket.socket() as reservation:
             reservation.bind(("127.0.0.1", 0))
             env["ABUS_HTTP_PORT"] = str(reservation.getsockname()[1])
-        await run(sys.executable, ROOT / "install.py", "--no-start", env=env, timeout=120)
+        await run(sys.executable, ROOT / "install.py", "--no-start", "--without-herdr", env=env, timeout=120)
         target = home / ".config/omarchy/plugins/syndicalt.abus"
         cli = home / ".local/bin/omarchy-abus"
         record = json.loads((home / ".local/share/abus/installation.json").read_text())
         python = Path(record["environments"][0]) / "bin/python"
+        installed_runtime = Path(record["releases"][0])
         await run("omarchy-plugin-validate", target)
         await run("desktop-file-validate", home / ".local/share/applications/syndicalt.abus.desktop")
         await run("systemd-analyze", "--user", "verify", home / ".config/systemd/user/abus.service")
@@ -91,10 +92,9 @@ async def verify():
                 "--unit=" + unit,
                 "--property=Restart=on-failure",
                 "--property=RestartSec=100ms",
-                "--property=WorkingDirectory=" + str(target),
                 *settings,
                 python,
-                target / "plugin/bin/abusd.py",
+                installed_runtime / "plugin/bin/abusd.py",
             )
             for _ in range(100):
                 try:
