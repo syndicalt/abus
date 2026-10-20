@@ -26,7 +26,7 @@ Compare `herdr agent list` with `omarchy abus list`. Pane names, IDs, status, an
 
 `uv run python scripts/verify_herdr.py` creates and removes an isolated Herdr session with a controlled receiver. It checks actual discovery, idle-pane submission, and literal argument handling without prompting an existing agent.
 
-The refactored adapter requires the [companion Herdr operation](../integrations/herdr/README.md). Set `ABUS_HERDR_BIN` to that build before running this script; the unmodified 0.9.1 binary is expected to reject submission.
+Setup provisions the [companion Herdr operation](../integrations/herdr/README.md). Set `ABUS_HERDR_BIN` to that build when testing an already compatible disposable session. `scripts/verify_managed_herdr.py --stock /path/to/stock-herdr --herdr-artifact /path/to/verified-companion` instead creates an isolated stock session and invokes ABUS’s real managed provisioning and handoff path. Run it for stock 0.9.1 and 0.9.5; it verifies live capability, pane/child identity and PTY I/O.
 
 ## Tailscale
 
@@ -54,6 +54,12 @@ The later refactor is recorded separately in [refactor validation](refactor-vali
 
 Ubuntu CI checks Python 3.11 and 3.12, lint/format, tests, distribution builds and runtime lock consistency. The manually dispatched native workflow additionally requires an owner-configured Omarchy runner. Local success does not establish that GitHub runners were configured or executed.
 
+## Marketplace lifecycle
+
+`uv run python scripts/verify_marketplace.py --herdr-artifact /path/to/verified-companion` exercises the stock `omarchy-plugin-add`, `update` and `remove` commands against a private temporary git HTTP fixture. It uses real native Service.qml activation, real supervised setup/daemon/cleanup jobs, and an installed durable mailbox. It destroys the native setup controller during provisioning, reloads the shell component after readiness, upgrades source and removes the plugin. It verifies setup survival, an unchanged daemon PID on reload, a new runtime on update, retained messages and automatic cleanup with retained history.
+
+A controlled shell activation adapter avoids loading the full desktop shell. Unit names are mapped to unique test names in the real user manager, and all are disabled/stopped and removed afterward. A private Tailscale LocalAPI fixture accepts only read requests; Herdr discovery is controlled. Thus this test does not establish real tailnet behavior or replace real Herdr handoff checks. It does not restart the actual ABUS service or existing Herdr sessions.
+
 ## Removal
 
-`python3 uninstall.py` removes managed application files, service, widget, dispatcher wrapper, and skill links. SQLite history is retained. Remove separately any harness MCP configuration entries added outside the installer.
+`omarchy plugin remove syndicalt.abus` triggers supervised cleanup after the plugin disappears. `python3 uninstall.py` also supports explicit removal of managed application files, service, widget, dispatcher wrapper, and skill links. Exposure must be verified disabled; failures preserve files and supervised cleanup retries. Private Herdr executables are retained for any sessions still using them. SQLite history is retained. Remove separately any harness MCP configuration entries added outside the installer.

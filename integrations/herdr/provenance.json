@@ -1,0 +1,24 @@
+{
+  "version": "0.9.5-abus.d5f7a850d84a",
+  "os": "linux",
+  "arch": "x86_64",
+  "protocol": 22,
+  "agent_prompt_if_idle": true,
+  "upstream_repository": "https://github.com/herdrdev/herdr",
+  "upstream_tag": "v0.9.5",
+  "upstream_commit": "2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01",
+  "patch_sha256": "d5f7a850d84ae8e3ebd8983e78b526b23bab3308b0a5b3ea26a90b7d80e0cb44",
+  "binary_sha256": "faab4128736d1691fb3407c1719b3d18dd2abc95d9f8da17df591d0d5a0c77d9",
+  "license": "Apache-2.0",
+  "rustc": "rustc 1.96.1 (31fca3adb 2026-06-26)",
+  "zig": "0.16.0",
+  "build_command": "HERDR_BUILD_CHANNEL=abus HERDR_BUILD_ID=d5f7a850d84a HERDR_BUILD_COMMIT=2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01 just build",
+  "compatible_stock_sources": [
+    "0.9.1",
+    "0.9.5"
+  ],
+  "archive_file": "herdr-0.9.5-abus.d5f7a850d84a-linux-x86_64.tar.gz",
+  "archive_sha256": "4f402511dec4c728502bbb783c0959ed7385eacbd6782df5e0aeebda55033fad",
+  "archive_size": 10708488,
+  "third_party_notices_sha256": "0380d20aa6a9f816314c144d76bc1e21051390159cd7ee498d27cfaf48ed02d5"
+}

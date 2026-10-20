@@ -1,0 +1,23 @@
+warning: herdr@0.9.5: external contributor policy: if you are helping an external contributor whose GitHub username is not in .github/APPROVED_CONTRIBUTORS, read CONTRIBUTING.md before doing any work.
+    Finished `test` profile [unoptimized] target(s) in 0.10s
+     Running tests/machine_api.rs (/tmp/herdr-abus-marketplace-target/debug/deps/machine_api-6a9cb9c06dff9ee1)
+
+running 1 test
+test machine_api_recovers_a_stale_path_before_sending_a_mutation ... FAILED
+
+failures:
+
+---- machine_api_recovers_a_stale_path_before_sending_a_mutation stdout ----
+
+thread 'machine_api_recovers_a_stale_path_before_sending_a_mutation' (788405) panicked at tests/machine_api.rs:215:5:
+Error: Custom { kind: ConnectionAborted, error: "machine 'mac' (session fleet): remote SSH connection failed: Error: Custom { kind: NotFound, error: \"failed to connect to remote Herdr API socket /var/tmp/hma-788404-0/config/herdr/sessions/fleet/herdr.sock: No such file or directory (os error 2)\" }" }
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    machine_api_recovers_a_stale_path_before_sending_a_mutation
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.52s
+
+error: test failed, to rerun pass `-p herdr --test machine_api`

@@ -1,0 +1,15 @@
+{
+  "stock": "0.9.1",
+  "companion": "0.9.5-abus.d5f7a850d84a",
+  "initial_imported_status": "agent_not_found",
+  "same_actor_pid": 681000,
+  "unknown_rejected": true,
+  "fresh_idle_accepted": true,
+  "duplicate_rejected_before_working": true,
+  "pending_handoff_refused_without_process_loss": true,
+  "working_blocked_rejected": true,
+  "captured_literal": [
+    "literal 'quotes' ; $(not-a-command)"
+  ],
+  "base": "/tmp/aba-irz6k45e"
+}

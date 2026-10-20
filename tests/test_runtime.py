@@ -137,11 +137,12 @@ async def test_herdr_refreshes_before_submission_and_serializes_aliases(monkeypa
     async def send(*_args, **_kwargs):
         entered.set()
         await release.wait()
-        return json.dumps({"result": {"type": "agent_prompted"}})
+        return {"type": "agent_prompted"}
 
     herdr.panes[0]["status"] = "idle"
+    herdr.delivery_ready = True
     monkeypatch.setattr(herdr, "refresh", AsyncMock())
-    monkeypatch.setattr("abus.herdr.command", send)
+    monkeypatch.setattr(herdr, "rpc", send)
     first = asyncio.create_task(herdr.prompt("herdr:w1:p3", {"id": "one"}, "alias-one"))
     try:
         await asyncio.wait_for(entered.wait(), 1)
@@ -159,10 +160,11 @@ async def test_herdr_notification_commands_preserve_opaque_ids(monkeypatch, mid)
     herdr = Herdr()
     herdr.panes = [{"address": "herdr:w1:p3", "pane_id": "w1:p3", "status": "idle"}]
     monkeypatch.setattr(herdr, "refresh", AsyncMock())
-    prompt = AsyncMock(return_value='{"result":{"type":"agent_prompted"}}')
-    monkeypatch.setattr("abus.herdr.command", prompt)
+    herdr.delivery_ready = True
+    prompt = AsyncMock(return_value={"type": "agent_prompted"})
+    monkeypatch.setattr(herdr, "rpc", prompt)
     await herdr.prompt("herdr:w1:p3", {"id": mid}, "worker")
-    assert prompt.call_args.args[2] == "prompt-if-idle"
-    content = prompt.call_args.args[4]
+    assert prompt.call_args.args[0] == "agent.prompt_if_idle"
+    content = prompt.call_args.args[1]["text"]
     ack = next(line for line in content.splitlines() if line.startswith("omarchy abus ack "))
     assert shlex.split(ack) == ["omarchy", "abus", "ack", "--name", "worker", "--", mid]

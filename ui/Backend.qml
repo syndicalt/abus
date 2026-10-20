@@ -25,6 +25,9 @@ Item {
     property double activityBefore: 0
     property string error: ""
     property bool connected: false
+    property var setupInfo: ({})
+    readonly property var herdrInfo: snapshot.status.herdr || ({})
+    readonly property string displayError: setupInfo.phase === "failed" ? "ABUS setup failed: " + setupInfo.error : !connected && setupInfo.phase === "installing" ? "Setting up ABUS. The service will connect when installation finishes." : error
     property var machines: []
     property string networkError: ""
     property var exposure: ({
@@ -34,6 +37,22 @@ Item {
     property bool refreshPending: false
     readonly property bool busy: poll.running
     readonly property string cli: Quickshell.shellDir + "/../bin/omarchy-abus"
+    FileView {
+        path: (Quickshell.env("XDG_DATA_HOME") || Quickshell.env("HOME") + "/.local/share") + "/abus/setup.json"
+        watchChanges: true
+        onFileChanged: reload()
+        onLoaded: {
+            try {
+                root.setupInfo = JSON.parse(text());
+            } catch (error) {
+                root.setupInfo = {
+                    phase: "failed",
+                    error: "Cannot read installation status: " + String(error)
+                };
+            }
+        }
+        onLoadFailed: root.setupInfo = ({})
+    }
     function refresh() {
         if (poll.running) {
             refreshPending = true;

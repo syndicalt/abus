@@ -5,9 +5,41 @@ import json
 import os
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 MARKER = "# ABUS managed Omarchy dispatcher"
+
+
+def setup_status(phase, error=None):
+    namespace = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "abus"
+    if namespace.is_symlink() or (namespace.exists() and namespace.stat().st_uid != os.getuid()):
+        return
+    namespace.mkdir(mode=0o700, parents=True, exist_ok=True)
+    atomic_write(
+        namespace / "setup.json",
+        (json.dumps({"phase": phase, "error": error, "updated_at": time.time()}) + "\n").encode(),
+        0o600,
+    )
+
+
+def source_digest(root, *, reference=None):
+    """Fingerprint installed runtime and setup inputs, excluding generated caches."""
+    fingerprint = hashlib.sha256()
+    reference = reference or root
+    paths = [
+        reference / name for name in ("manifest.json", "requirements.lock", "install.py", "uninstall.py")
+    ]
+    for directory in ("abus", "bin", "mcp", "plugin", "ui", "assets", "skill", "integrations/herdr"):
+        paths.extend(
+            path
+            for path in (reference / directory).rglob("*")
+            if path.is_file() and "__pycache__" not in path.parts
+        )
+    for path in sorted(paths):
+        relative = path.relative_to(reference)
+        fingerprint.update(str(relative).encode() + b"\0" + (root / relative).read_bytes())
+    return fingerprint.hexdigest()
 
 
 def digest(content):

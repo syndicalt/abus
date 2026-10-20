@@ -10,11 +10,18 @@ One systemd user service owns ABUS. Python asyncio serves local NDJSON, coordina
 | HTTP socket | `$XDG_RUNTIME_DIR/abus-http.sock`, 0600 |
 | HTTP backend | `127.0.0.1:8744` |
 | Database | `$XDG_STATE_HOME/omarchy/abus/abus.db` |
-| Installed code | `$XDG_CONFIG_HOME/omarchy/plugins/syndicalt.abus` |
+| Plugin checkout | `$XDG_CONFIG_HOME/omarchy/plugins/syndicalt.abus` |
+| Runtime code | `$XDG_DATA_HOME/abus/releases/<source-hash>` |
+| Private Herdr | `$XDG_DATA_HOME/abus/herdr/<binary-sha256>/herdr` |
+| Setup status | `$XDG_DATA_HOME/abus/setup.json` |
 | Dependencies | `$XDG_DATA_HOME/abus/environments/<lock-hash>-py312` |
 | Unit | `$XDG_CONFIG_HOME/systemd/user/abus.service` |
 
 XDG state/data/config default to `~/.local/state`, `~/.local/share`, and `~/.config`. Without an XDG runtime directory, a private `/tmp/abus-<uid>` directory is used. Existing runtime directories must be user-owned, private, and not symlinks. Storage directories are 0700. SQLite uses WAL and FULL synchronization; one daemon owns writes. An advisory lock is acquired before opening or migrating the database. Only stale sockets are removed; ordinary files are preserved.
+
+Plugin activation launches a transient `abus-setup.service` job that survives shell reloads. Setup holds a user-owned installation lock, verifies the companion artifact and stages dependencies and immutable runtime code before publishing generated files. An unchanged source/environment/configuration uses `systemctl start`, preserving an active daemon PID. An update publishes new runtime paths and restarts the daemon. The receipt tracks prior runtimes and environments for later cleanup.
+
+`abus-cleanup.path` watches the plugin parent directory. After plugin removal, `abus-cleanup.service` runs the retained uninstaller under the installation lock, rechecks plugin absence, verifies exposure is disabled and removes owned files. Failure preserves files and retries after 30 seconds. Existing Herdr processes and their private executable remain available.
 
 systemd restarts the daemon after failure. Workers are supervised. Quickshell may reload independently. Shutdown cancels external subprocesses and closes sockets. Persistent messages, receipts, subscriptions, and retry schedules survive restarts.
 
@@ -36,7 +43,7 @@ Registration and presence are distinct. An inbox poll, claim, or heartbeat refre
 
 `omarchy abus expose on|off` uses LocalAPI `GET /localapi/v0/serve-config` and a conditional `POST` with the returned ETag in `If-Match`. A concurrent change returns a conflict for inspection and retry. Ownership requires an exact root proxy to the configured backend and an HTTPS listener; a matching substring or another mount is insufficient. Other ports and mounts are preserved. Inspection failure is reported as unknown exposure, and normal uninstall requires verified disabled exposure before removing files.
 
-`ABUS_NETWORK_PORT` and `ABUS_HTTP_PORT` configure the tailnet HTTPS and local backend ports through the service environment. Receiving peers must agree on the discovery HTTPS port.
+`ABUS_NETWORK_PORT` and `ABUS_HTTP_PORT` configure the tailnet HTTPS and local backend ports through the service environment. Receiving peers must agree on the discovery HTTPS port. `ABUS_TAILSCALE_SOCKET` selects a nonstandard LocalAPI Unix socket; the default remains `/var/run/tailscale/tailscaled.sock`.
 
 A loopback HTTP backend avoids Serve's requirement for privileged Unix-socket/path serving. Tailscale Serve supplies forwarded source headers. Before accepting a send or discovery request, ABUS resolves `X-Forwarded-For` through `/localapi/v0/whois?addr=<source>` on `/var/run/tailscale/tailscaled.sock`. The returned node DNS name determines the sender's namespace. This works for user-owned and tagged nodes. Local processes are trusted, matching Serve's localhost identity-header model; ABUS is designed for a personal Omarchy account.
 

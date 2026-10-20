@@ -1,0 +1,16 @@
+{
+  "stock_version": "0.9.1",
+  "companion_version": "0.9.5-abus.d5f7a850d84a",
+  "guard_capability": true,
+  "protocol": 22,
+  "same_pane": "w1:p1",
+  "same_shell_pid": 680637,
+  "before_after_io": [
+    "before",
+    "after"
+  ],
+  "socket_path_preserved": "/tmp/abh-tv1h3bt8/run/api.sock",
+  "old_socket_inode": 349707,
+  "new_socket_inode": 349791,
+  "base": "/tmp/abh-tv1h3bt8"
+}

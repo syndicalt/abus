@@ -81,8 +81,9 @@ async def test_herdr_delivery_is_queued_until_idle_and_only_submitted_once(bus, 
     bridge.panes = [{"address": "herdr:w1:p1", "pane_id": "w1:p1", "status": "working"}]
     bus.herdr = bridge
     monkeypatch.setattr(bridge, "refresh", AsyncMock())
-    prompt = AsyncMock(return_value='{"result":{"type":"agent_prompted"}}')
-    monkeypatch.setattr("abus.herdr.command", prompt)
+    bridge.delivery_ready = True
+    prompt = AsyncMock(return_value={"type": "agent_prompted"})
+    monkeypatch.setattr(bridge, "rpc", prompt)
     mid = (
         await rpc(bus, "send", to="herdr:w1:p1", type="prompt", payload={"text": "a 'quote' ; $(literal)"})
     )["id"]
@@ -92,8 +93,9 @@ async def test_herdr_delivery_is_queued_until_idle_and_only_submitted_once(bus, 
     assert bus.store.history({})["messages"][0]["state"] == "queued"
     bridge.panes[0]["status"] = "idle"
     await bus.deliver(row)
-    assert prompt.call_args.args[:4] == ("herdr", "agent", "prompt-if-idle", "w1:p1")
-    assert "$(literal)" in prompt.call_args.args[4]
+    assert prompt.call_args.args[0] == "agent.prompt_if_idle"
+    assert prompt.call_args.args[1]["target"] == "w1:p1"
+    assert "$(literal)" in prompt.call_args.args[1]["text"]
     assert bus.store.db.execute("SELECT state FROM messages WHERE id=?", (mid,)).fetchone()[0] == "submitted"
     assert not bus.store.pending()
 

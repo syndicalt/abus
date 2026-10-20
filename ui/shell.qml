@@ -244,7 +244,7 @@ ShellRoot {
                     }
                 }
                 Rectangle {
-                    visible: backend.error !== ""
+                    visible: backend.displayError !== ""
                     Layout.fillWidth: true
                     implicitHeight: alertText.implicitHeight + 20
                     color: Theme.raised
@@ -252,7 +252,7 @@ ShellRoot {
                         id: alertText
                         anchors.fill: parent
                         anchors.margins: 10
-                        text: backend.error
+                        text: backend.displayError
                         color: Theme.error
                         wrapMode: Text.Wrap
                         elide: Text.ElideNone
@@ -766,6 +766,32 @@ ShellRoot {
                                         wrapMode: Text.Wrap
                                         elide: Text.ElideNone
                                         font.pixelSize: 12
+                                    }
+                                }
+                            }
+                            Rectangle {
+                                Layout.fillWidth: true
+                                implicitHeight: herdrDetails.implicitHeight + 36
+                                radius: 8
+                                color: Theme.surface
+                                ColumnLayout {
+                                    id: herdrDetails
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.top: parent.top
+                                    anchors.margins: 18
+                                    spacing: 9
+                                    LabelText {
+                                        text: backend.herdrInfo.delivery_ready ? "Herdr pane delivery ready" : "Herdr pane delivery unavailable"
+                                        font.pixelSize: 18
+                                        font.bold: true
+                                        Layout.fillWidth: true
+                                        wrapMode: Text.Wrap
+                                        elide: Text.ElideNone
+                                    }
+                                    CopyText {
+                                        text: backend.herdrInfo.error || "Runtime: " + (backend.herdrInfo.runtime_version || "not yet detected")
+                                        Layout.fillWidth: true
                                     }
                                 }
                             }

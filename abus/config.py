@@ -12,6 +12,7 @@ class Config:
     poll_interval: float = 5.0
     gateway_port: int | None = None
     delivery_concurrency: int = 8
+    tailscale_socket: str = "/var/run/tailscale/tailscaled.sock"
 
     def __post_init__(self):
         for name in ("network_port", "gateway_port"):
@@ -32,6 +33,7 @@ class Config:
             state,
             int(os.environ.get("ABUS_NETWORK_PORT", "8743")),
             gateway_port=int(os.environ.get("ABUS_HTTP_PORT", "8744")),
+            tailscale_socket=os.environ.get("ABUS_TAILSCALE_SOCKET", "/var/run/tailscale/tailscaled.sock"),
         )
 
     @property
