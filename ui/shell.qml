@@ -224,12 +224,6 @@ ShellRoot {
                         Item {
                             Layout.fillWidth: true
                         }
-                        LabelText {
-                            text: "Read only"
-                            font.pixelSize: 10
-                            color: Theme.muted
-                            font.letterSpacing: 1.5
-                        }
                         Rectangle {
                             width: 7
                             height: 7
