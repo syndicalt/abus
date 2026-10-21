@@ -5,7 +5,9 @@ import json
 import logging
 import os
 import signal
+import socket
 import stat
+import struct
 import time
 
 from aiohttp import ClientError, web
@@ -18,6 +20,18 @@ from .protocol import loads
 from .store import SWEEP_BATCH, Store, address, agent_name, text
 
 log = logging.getLogger("abus")
+
+
+def private_gateway_peer(transport):
+    """Trust forwarded identity only over owner/root Unix connections on Linux."""
+    peer = transport.get_extra_info("socket") if transport else None
+    try:
+        if peer is None or peer.family != socket.AF_UNIX:
+            return False
+        _, uid, _ = struct.unpack("iII", peer.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+    except (AttributeError, OSError, ValueError, struct.error):
+        return False
+    return uid in {0, os.getuid()}
 
 
 class Bus:
@@ -228,6 +242,11 @@ class Bus:
 
     @web.middleware
     async def gateway_limit(self, request, handler):
+        if not private_gateway_peer(request.transport):
+            return web.json_response(
+                {"error": {"code": "forbidden", "message": "An owner-only Unix connection is required"}},
+                status=403,
+            )
         if self.gateway_clients >= 32:
             return web.json_response({"error": {"code": "busy", "message": "Gateway is busy"}}, status=503)
         self.gateway_clients += 1
@@ -374,8 +393,6 @@ class Bus:
         await self.runner.setup()
         await web.UnixSite(self.runner, str(self.config.http_socket)).start()
         os.chmod(self.config.http_socket, 0o600)
-        if self.config.gateway_port is not None:
-            await web.TCPSite(self.runner, "127.0.0.1", self.config.gateway_port).start()
         self.tasks = [
             asyncio.create_task(self.maintenance()),
             asyncio.create_task(self.discovery()),

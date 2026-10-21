@@ -17,7 +17,7 @@ The user authorized building to the architectural recommendations in this sessio
 - Seven days or newest 1,000 messages per destination. Retention bounds delivery and deduplication.
 - CLI and official Python MCP SDK expose communication and management.
 - Herdr is an adapter for discovery, status, and idle-pane prompt submission.
-- Tailscale Serve proxies HTTPS to a private loopback HTTP gateway. No new account or agent token system. Network exposure is optional.
+- Tailscale Serve proxies HTTPS to an owner-only Unix HTTP socket. Check kernel peer credentials before trusting forwarded identity; never bind a TCP backend. No new account or agent token system. Network exposure is optional.
 - `aiohttp` handles HTTP; do not hand-roll HTTP or MCP framing. Keep dependencies pinned.
 
 ## Invariants

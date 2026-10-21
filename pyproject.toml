@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "omarchy-abus"
-version = "1.0.0"
+version = "1.0.1"
 description = "Durable agent messaging and a native Omarchy desktop app"
 requires-python = ">=3.11"
 dependencies = ["aiohttp>=3.12,<4", "mcp>=1.20,<2"]

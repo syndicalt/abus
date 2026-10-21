@@ -1,15 +1,18 @@
 import asyncio
 import json
 import os
+import socket
 import stat
-from unittest.mock import AsyncMock
+import struct
+from unittest.mock import AsyncMock, Mock
 
 import aiohttp
 import pytest
+from aiohttp import web
 
 from abus.client import call
-from abus.config import BusError
-from abus.daemon import Bus
+from abus.config import BusError, Config
+from abus.daemon import Bus, private_gateway_peer
 
 
 async def rpc(bus, method, **params):
@@ -115,6 +118,76 @@ async def test_gateway_rejects_anonymous_and_relay_requests(bus, monkeypatch):
             assert r.status == 403
         async with client.post("http://abus/v1/register", json={"name": "target"}) as r:
             assert r.status == 404
+
+
+async def test_gateway_rejects_forwarded_identity_over_tcp(bus, monkeypatch):
+    """Even an accidentally attached TCP site cannot trust a forged Serve header."""
+    principal = AsyncMock(return_value={"machine": "known.tailnet.test", "user": "owner"})
+    monkeypatch.setattr(bus.network, "principal", principal)
+    bus.store.register({"name": "private-worker"})
+    bus.herdr.panes = [{"pane_id": "private-pane", "title": "private project", "cwd": "/private"}]
+    site = web.TCPSite(bus.runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]
+    try:
+        async with aiohttp.ClientSession(headers={"X-Forwarded-For": "100.64.0.1"}) as client:
+            for route in ("list", "status"):
+                async with client.get(f"http://127.0.0.1:{port}/v1/{route}") as response:
+                    assert response.status == 403
+                    assert "private" not in await response.text()
+            async with client.post(
+                f"http://127.0.0.1:{port}/v1/send",
+                json={"to": "agent:private-worker", "type": "event", "payload": {"text": "spoofed"}},
+            ) as response:
+                assert response.status == 403
+        principal.assert_not_awaited()
+        assert not bus.store.inbox({"name": "private-worker", "observer": True})["messages"]
+    finally:
+        await site.stop()
+
+
+@pytest.mark.parametrize("uid", [0, os.getuid(), os.getuid() + 1])
+def test_gateway_checks_kernel_peer_uid(uid):
+    peer = Mock(family=socket.AF_UNIX)
+    peer.getsockopt.return_value = struct.pack("iII", 123, uid, uid)
+    transport = Mock()
+    transport.get_extra_info.return_value = peer
+    assert private_gateway_peer(transport) is (uid in {0, os.getuid()})
+    peer.getsockopt.assert_called_once_with(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+
+
+@pytest.mark.parametrize("failure", [OSError(), AttributeError(), ValueError(), b"bad"])
+def test_gateway_fails_closed_without_valid_kernel_credentials(failure):
+    peer = Mock(family=socket.AF_UNIX)
+    if isinstance(failure, Exception):
+        peer.getsockopt.side_effect = failure
+    else:
+        peer.getsockopt.return_value = failure
+    transport = Mock()
+    transport.get_extra_info.return_value = peer
+    assert not private_gateway_peer(transport)
+    assert not private_gateway_peer(None)
+
+
+async def test_retired_http_port_is_never_bound(tmp_path, monkeypatch):
+    # An occupied legacy port must neither prevent startup nor become a listener.
+    with socket.socket() as occupied:
+        occupied.bind(("127.0.0.1", 0))
+        occupied.listen()
+        daemon = Bus(Config(tmp_path / "run", tmp_path / "state", gateway_port=occupied.getsockname()[1]))
+        monkeypatch.setattr(daemon.herdr, "refresh", AsyncMock(return_value=[]))
+        monkeypatch.setattr(daemon.network, "refresh", AsyncMock())
+        try:
+            await daemon.start()
+            assert len(daemon.runner.sites) == 1
+            assert isinstance(next(iter(daemon.runner.sites)), web.UnixSite)
+            async with aiohttp.ClientSession(
+                connector=aiohttp.UnixConnector(path=str(daemon.config.http_socket))
+            ) as client:
+                async with client.get("http://abus/v1/status") as response:
+                    assert response.status == 200
+        finally:
+            await daemon.close()
 
 
 async def test_remote_delivery_retries_without_duplicating_destination(bus, tmp_path, monkeypatch):

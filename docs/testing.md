@@ -30,6 +30,10 @@ Setup provisions the [companion Herdr operation](../integrations/herdr/README.md
 
 ## Tailscale
 
+`uv run unshare --user --map-auto --map-root-user python scripts/verify_gateway_boundary.py` uses subordinate UID mappings to test a genuinely different kernel UID against disposable sockets. It verifies directory and 0600 socket denial, then deliberately relaxes both and checks that Unix peer credentials still reject discovery, sending and health before WhoIs. An intentionally attached TCP test site must also return 403. The production daemon must have only its Unix HTTP site. No existing bus, Herdr session or Tailscale configuration is used.
+
+Enabling real Unix-socket Serve requires Tailscale local-administrator authorization. A rejected attempt is a permission-boundary check, not a successful HTTPS integration test. Record real proxy coverage separately from fixture-based forwarding tests.
+
 On two authorized test machines, enable exposure on the receiver, register a dedicated receiving agent, and discover it from the sender. Send with an explicit ID, repeat that ID, and check that the receiver has one envelope and a machine-qualified return address. Take the receiver offline and verify the sender keeps a queued outbox item and retries after recovery. Reply with the original correlation ID. Disable only the ABUS handler afterward.
 
 A same-machine test through the actual Tailscale HTTPS URL verifies Serve configuration, certificates, forwarding headers, LocalAPI source identity, and gateway acceptance. It does not establish connectivity from a separate physical machine; the two-instance automated test separately covers routing and retry semantics.

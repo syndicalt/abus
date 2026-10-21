@@ -239,11 +239,13 @@ async def test_listener_stops_receiver_before_releasing_claim(bus, tmp_path, sig
 
 @pytest.fixture
 async def local_api(tmp_path, monkeypatch):
-    state = {"config": {}, "etag": '"one"', "writes": [], "conflict": False}
+    state = {"config": {}, "etag": '"one"', "writes": [], "conflict": False, "denied": False}
 
     async def serve(request):
         if request.method == "GET":
             return web.json_response(state["config"], headers={"Etag": state["etag"]})
+        if state["denied"]:
+            return web.Response(status=403)
         if state["conflict"] or request.headers.get("If-Match") != state["etag"]:
             return web.Response(status=412)
         state["config"] = await request.json()
@@ -276,6 +278,7 @@ async def test_serve_configuration_updates_are_guarded_and_preserve_other_ports(
     other = {"node.test:443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:9000"}}}}
     state["config"] = {"TCP": {"443": {"HTTPS": True}}, "Web": other.copy()}
     assert (await network.expose(True))["enabled"] is True
+    assert state["config"]["Web"]["node.test:8743"]["Handlers"]["/"] == {"Proxy": network.config.serve_proxy}
     assert state["config"]["Web"]["node.test:443"] == other["node.test:443"]
     assert (await network.expose(False))["enabled"] is False
     assert state["config"] == {"TCP": {"443": {"HTTPS": True}}, "Web": other}
@@ -287,6 +290,44 @@ async def test_serve_accepts_null_optional_maps(local_api):
     state["config"] = {"TCP": None, "Web": None}
     assert (await network.expose(True))["enabled"] is True
     assert (await network.expose(False))["enabled"] is False
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_legacy_serve_route_migration_preserves_other_mounts(local_api, enabled):
+    network, state = local_api
+    other = {"Proxy": "http://127.0.0.1:9000"}
+    state["config"] = {
+        "TCP": {"8743": {"HTTPS": True}, "443": {"HTTPS": True}},
+        "Web": {
+            "node.test:8743": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8744"}, "/other": other}},
+            "node.test:443": {"Handlers": {"/": other}},
+        },
+    }
+    before = await network.exposure()
+    assert before["enabled"] is None
+    assert "Legacy TCP route" in before["error"]
+    assert (await network.expose(enabled))["enabled"] is enabled
+    handlers = state["config"]["Web"]["node.test:8743"]["Handlers"]
+    assert handlers["/other"] == other
+    assert state["config"]["Web"]["node.test:443"] == {"Handlers": {"/": other}}
+    if enabled:
+        assert handlers["/"] == {"Proxy": network.config.serve_proxy}
+    else:
+        assert "/" not in handlers
+    assert len(state["writes"]) == 1
+    if not enabled:
+        assert (await network.expose(False))["enabled"] is False
+        assert len(state["writes"]) == 1
+
+
+async def test_unix_serve_permission_failure_has_no_tcp_fallback(local_api):
+    network, state = local_api
+    state["denied"] = True
+    with pytest.raises(BusError, match="Unix-socket serving requires a local administrator"):
+        await network.expose(True)
+    assert state["config"] == {}
+    assert not state["writes"]
+    assert (await network.exposure())["enabled"] is False
 
 
 @pytest.mark.parametrize("proxy", ["http://127.0.0.1:9999", "http://127.0.0.1:87440"])

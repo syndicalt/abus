@@ -10,7 +10,7 @@ class Config:
     state: Path
     network_port: int = 8743
     poll_interval: float = 5.0
-    gateway_port: int | None = None
+    gateway_port: int | None = None  # Retired TCP port: identify legacy Serve routes only.
     delivery_concurrency: int = 8
     tailscale_socket: str = "/var/run/tailscale/tailscaled.sock"
 
@@ -43,6 +43,10 @@ class Config:
     @property
     def http_socket(self):
         return self.runtime / "abus-http.sock"
+
+    @property
+    def serve_proxy(self):
+        return f"unix:{self.http_socket.absolute()}"
 
     def prepare(self):
         self.runtime.mkdir(mode=0o700, parents=True, exist_ok=True)
