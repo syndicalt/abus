@@ -8,7 +8,6 @@ One systemd user service owns ABUS. Python asyncio serves local NDJSON, coordina
 |---|---|
 | Local API socket | `$XDG_RUNTIME_DIR/abus.sock`, 0600 |
 | HTTP socket | `$XDG_RUNTIME_DIR/abus-http.sock`, 0600 |
-| HTTP backend | `127.0.0.1:8744` |
 | Database | `$XDG_STATE_HOME/omarchy/abus/abus.db` |
 | Plugin checkout | `$XDG_CONFIG_HOME/omarchy/plugins/syndicalt.abus` |
 | Runtime code | `$XDG_DATA_HOME/abus/releases/<source-hash>` |
@@ -43,9 +42,13 @@ Registration and presence are distinct. An inbox poll, claim, or heartbeat refre
 
 `omarchy abus expose on|off` uses LocalAPI `GET /localapi/v0/serve-config` and a conditional `POST` with the returned ETag in `If-Match`. A concurrent change returns a conflict for inspection and retry. Ownership requires an exact root proxy to the configured backend and an HTTPS listener; a matching substring or another mount is insufficient. Other ports and mounts are preserved. Inspection failure is reported as unknown exposure, and normal uninstall requires verified disabled exposure before removing files.
 
-`ABUS_NETWORK_PORT` and `ABUS_HTTP_PORT` configure the tailnet HTTPS and local backend ports through the service environment. Receiving peers must agree on the discovery HTTPS port. `ABUS_TAILSCALE_SOCKET` selects a nonstandard LocalAPI Unix socket; the default remains `/var/run/tailscale/tailscaled.sock`.
+`ABUS_NETWORK_PORT` configures the tailnet HTTPS port. Receiving peers must agree on this discovery port. The backend is exclusively `$XDG_RUNTIME_DIR/abus-http.sock`; there is no TCP listener, even if `ABUS_HTTP_PORT` is set. That retired setting (default 8744) only identifies an exact legacy root proxy for conditional migration/removal. `expose on` replaces that root with the Unix proxy, preserving other mounts; `expose off` removes either exact owned root. Legacy routes are reported as requiring migration, never as verified disabled or healthy exposure. `ABUS_TAILSCALE_SOCKET` selects a nonstandard LocalAPI Unix socket; the default remains `/var/run/tailscale/tailscaled.sock`.
 
-A loopback HTTP backend avoids Serve's requirement for privileged Unix-socket/path serving. Tailscale Serve supplies forwarded source headers. Before accepting a send or discovery request, ABUS resolves `X-Forwarded-For` through `/localapi/v0/whois?addr=<source>` on `/var/run/tailscale/tailscaled.sock`. The returned node DNS name determines the sender's namespace. This works for user-owned and tagged nodes. Local processes are trusted, matching Serve's localhost identity-header model; ABUS is designed for a personal Omarchy account.
+The HTTP Unix socket is 0600 inside the validated owner-only runtime directory. Every HTTP route first requires an AF_UNIX connection and Linux `SO_PEERCRED` with the daemon owner's UID or root. Missing/invalid credentials, other UIDs and TCP transports fail closed before WhoIs or request handling, including health requests. Root-owned tailscaled can access the socket. Processes running as the ABUS owner and root are trusted; other local users cannot supply identity headers to this backend.
+
+Tailscale Serve supplies forwarded source headers. After checking the proxy connection, ABUS resolves `X-Forwarded-For` through `/localapi/v0/whois?addr=<source>` on the configured LocalAPI socket. The returned node DNS name determines the sender's namespace. This works for user-owned and tagged nodes.
+
+Tailscale separately authorizes Unix-socket serving as a local-administrator operation ([upstream authorization](https://github.com/tailscale/tailscale/blob/main/ipn/localapi/serve.go)). Being an operator alone may be insufficient. Permission failures include the LocalAPI error and leave the backend private; ABUS never elevates, weakens permissions or falls back to TCP. An administrator can configure the exact route with `sudo tailscale serve --bg --https=8743 unix:/run/user/1000/abus-http.sock`, substituting the actual port and runtime path after checking port ownership. No global Serve reset is required. Local messaging works without network exposure.
 
 The remote API offers `GET /v1/status`, authenticated `GET /v1/list`, and authenticated `POST /v1/send`. It cannot register recipients, read inboxes, acknowledge deliveries, change exposure, or relay a message to a third machine. Network reachability is governed by Tailscale grants. No agent token is needed.
 

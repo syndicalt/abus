@@ -91,7 +91,9 @@ omarchy abus expose off
 
 Use a Tailscale hostname, DNS name, or stable node ID. Only peers advertising a reachable ABUS endpoint appear in `machines`. Network sends enter a durable local outbox and retry with the same message ID. The destination deduplicates repeated envelopes. Replies use the routable sender address returned by the destination.
 
-Tailscale Serve proxies HTTPS port 8743 to an HTTP gateway bound only to `127.0.0.1:8744`. The daemon also provides a private Unix HTTP socket. The gateway validates forwarded source addresses against Tailscale's LocalAPI, namespaces remote senders by their source machine, and refuses remote relaying or registration. Tailscale grants control who may reach the endpoint. As with Serve's identity-header model, local processes are trusted. See [network details](docs/architecture.md#network).
+Tailscale Serve proxies HTTPS port 8743 to `$XDG_RUNTIME_DIR/abus-http.sock` (0600 in an owner-only directory). ABUS checks Unix peer credentials, accepting only its own UID or root, before validating forwarded source addresses with Tailscale's LocalAPI. It has no TCP backend. Remote senders are namespaced by source machine; relaying and remote registration are refused. Tailscale grants control network access. Processes running as the ABUS owner and root are trusted.
+
+Enabling Unix-socket Serve requires Tailscale's local-administrator authorization. If `expose on` reports a permission error, an administrator must configure the exact dedicated route, for example `sudo tailscale serve --bg --https=8743 unix:/run/user/1000/abus-http.sock` with this user's actual runtime path. ABUS does not elevate automatically or fall back to TCP. On upgrades from the loopback backend, use `omarchy abus expose off` to remove the legacy route before enabling the Unix route. See [network details](docs/architecture.md#network).
 
 ## Reliability and limits
 

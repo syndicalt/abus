@@ -25,7 +25,7 @@ def config_map(value, field):
     return value
 
 
-def serve_handler(config, port, expected):
+def serve_handler(config, port, expected, *, allow_missing_root=False):
     """Find the owned root mount; never infer ownership from another path or URL."""
     suffix = f":{port}"
     for foreground in config_map(config.get("Foreground"), "Foreground").values():
@@ -46,6 +46,8 @@ def serve_handler(config, port, expected):
         raise BusError("port_in_use", f"Tailscale port {port} has ambiguous host ownership")
     host, web = entries[0]
     handlers = config_map(config_map(web, "Web entry").get("Handlers"), "Handlers")
+    if allow_missing_root and "/" not in handlers and tcp == {"HTTPS": True}:
+        return None
     if handlers.get("/") != {"Proxy": expected} or tcp != {"HTTPS": True}:
         raise BusError("port_in_use", f"Tailscale port {port} belongs to another service")
     return host
@@ -240,27 +242,46 @@ class Network:
                 raise BusError("unavailable", f"Cannot inspect Tailscale Serve: HTTP {response.status}")
             return await read_json(response, 1024 * 1024, nullable=True), response.headers.get("Etag")
 
+    def owned_handler(self, config, *, allow_missing_root=False):
+        """Recognize only our exact Unix route or the explicitly configured legacy route."""
+        try:
+            return (
+                serve_handler(
+                    config,
+                    self.config.network_port,
+                    self.config.serve_proxy,
+                    allow_missing_root=allow_missing_root,
+                ),
+                False,
+            )
+        except BusError as error:
+            if error.code != "port_in_use" or self.config.gateway_port is None:
+                raise
+            legacy = f"http://127.0.0.1:{self.config.gateway_port}"
+            return serve_handler(config, self.config.network_port, legacy), True
+
     async def expose(self, enabled):
         async with self._exposure_lock:
             if enabled:
                 await self.refresh()
-                if self.error or self.config.gateway_port is None:
-                    raise BusError("unavailable", self.error or "HTTP gateway is not configured")
+                if self.error:
+                    raise BusError("unavailable", self.error)
             config, etag = await self.serve_config()
             if not etag:
                 raise BusError("unavailable", "Tailscale Serve does not provide a configuration guard")
             port = str(self.config.network_port)
-            expected = f"http://127.0.0.1:{self.config.gateway_port}"
-            owned = serve_handler(config, port, expected)
-            if bool(owned) == enabled:
+            owned, legacy = self.owned_handler(config, allow_missing_root=not enabled)
+            if bool(owned) == enabled and not (enabled and legacy):
                 return await self.exposure()
             changed = copy.deepcopy(config)
             if enabled:
-                host = f"{self.machine}:{port}"
+                host = owned or f"{self.machine}:{port}"
                 changed["TCP"] = config_map(changed.get("TCP"), "TCP")
                 changed["Web"] = config_map(changed.get("Web"), "Web")
                 changed["TCP"][port] = {"HTTPS": True}
-                changed["Web"][host] = {"Handlers": {"/": {"Proxy": expected}}}
+                if not owned:
+                    changed["Web"][host] = {"Handlers": {}}
+                changed["Web"][host]["Handlers"]["/"] = {"Proxy": self.config.serve_proxy}
             else:
                 handlers = changed["Web"][owned]["Handlers"]
                 del handlers["/"]
@@ -273,7 +294,13 @@ class Network:
                 if response.status == 412:
                     raise BusError("config_conflict", "Tailscale Serve changed; inspect it and retry")
                 if response.status != 200:
-                    raise BusError("external_error", f"Cannot update Tailscale Serve: HTTP {response.status}")
+                    detail = (await response.content.read(1024)).decode("utf-8", errors="replace").strip()
+                    raise BusError(
+                        "external_error",
+                        f"Cannot update Tailscale Serve: HTTP {response.status}: {detail}. "
+                        "Unix-socket serving requires a local administrator authorized by Tailscale. "
+                        "No TCP fallback is used.",
+                    )
             actual = await self.exposure()
             if actual["enabled"] is not enabled:
                 raise BusError("unavailable", "Cannot verify the requested Tailscale exposure state")
@@ -283,13 +310,18 @@ class Network:
     async def exposure(self):
         try:
             config, _ = await self.serve_config()
-            expected = f"http://127.0.0.1:{self.config.gateway_port}"
-            active = bool(serve_handler(config, self.config.network_port, expected))
+            owned, legacy = self.owned_handler(config, allow_missing_root=True)
+            active = bool(owned) and not legacy
             return {
-                "enabled": active,
+                "enabled": None if legacy else active,
                 "url": f"https://{self.machine}:{self.config.network_port}" if active else None,
                 "port": self.config.network_port,
-                "error": None,
+                "error": (
+                    "Legacy TCP route needs migration; run omarchy abus expose off to remove it, "
+                    "then expose on to use the private Unix socket"
+                    if legacy
+                    else None
+                ),
                 "updated_at": time.time(),
             }
         except (aiohttp.ClientError, BusError, ValueError, TimeoutError) as error:

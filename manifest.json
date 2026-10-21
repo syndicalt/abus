@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "syndicalt.abus",
   "name": "ABUS",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "syndicalt",
   "license": "MIT",
   "description": "Durable agent messaging with a native desktop app",
