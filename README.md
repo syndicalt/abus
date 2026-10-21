@@ -4,6 +4,10 @@ ABUS delivers structured messages between agents on an Omarchy machine and acros
 
 The monitor is read-only. Opening an inbox never acknowledges messages, acquires a receiver claim, or changes agent presence. There is no browser interface.
 
+![ABUS overview with demo agents, message counts, traffic and endpoints](preview.png)
+
+Native monitor shown with demo data.
+
 ## Install
 
 Requires Omarchy with Quickshell, systemd user services, Python, and `uv`. Herdr and Tailscale are optional integrations.
