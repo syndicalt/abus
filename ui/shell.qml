@@ -303,11 +303,12 @@ ShellRoot {
                                 }
                             }
                             ScrollView {
+                                id: inboxScroll
                                 Layout.fillWidth: true
                                 Layout.fillHeight: true
                                 clip: true
                                 ColumnLayout {
-                                    width: parent.width
+                                    width: inboxScroll.availableWidth
                                     spacing: 5
                                     Repeater {
                                         model: backend.snapshot.agents
